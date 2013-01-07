@@ -2,6 +2,7 @@ from tables import *
 
 class BookTable(IsDescription):
     timestamp   = Int64Col()
+    timestamp_s = StringCol(12)
     symbol      = StringCol(8) 
     ask         = Int64Col(shape=(5,2))
     bid         = Int64Col(shape=(5,2))    
