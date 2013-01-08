@@ -56,7 +56,6 @@ class PriceOrderedDict(object):
         return self.d.get(px, 0)
 
     def update_quantity(self, px, q):
-        #print "Updating with ", px, q
         assert(q!=0)
         assert(len(self.L) == len(self.d))
         qty = self.d.get(px)
@@ -78,15 +77,18 @@ class PriceOrderedDict(object):
             self.sorted = True
         if 0 == len(self.L):
             return None
-        #print self.L
         if self.ascending:
             return self.L[0]
         else:
             return self.L[-1]
 
 def get_date_of_file(fileName):
-    year, month, day = __DateRe__.search(fileName).groups()
-    return datetime.date(int(year), int(month), int(day))
+    m = __DateRe__.search(fileName).groups()
+    if m:
+        year, month, day = m
+        return datetime.date(int(year), int(month), int(day))
+    else:
+        return None
 
 def make_timestamp(start_of_date_seconds, seconds, millis):
     seconds = int(seconds)
@@ -195,24 +197,39 @@ Single Modify record
         self.__is_buy = fields[11] == 'B'
         self.__timestamp = make_timestamp(start_of_date_seconds, fields[5], fields[6])
 
+class FileRecordCounter(object):
+    readable(h5_file = None, count = 0)
+
+    def __init__(self, h5_file):
+        self.__h5_file = h5_file
+        self.__count = 0
+
+    def increment_count(self):
+        self.__count += 1
+        print "Incrementing counter ", self.__count
+        if 0 == (self.__count % __FLUSH_FREQ__):
+            print "Calling flush"
+            self.__h5_file.flush()
+
 class BookBuilder(object):
 
     __book_files__ = {}
 
     def __init__(self, symbol, file_name):
         self.__output_path = BOOK_DATA / file_name
-        self.__book_file = BookBuilder.__book_files__.get(self.__output_path, None)
-        if not self.__book_file:
-            self.__book_file = \
-                openFile(self.__output_path, mode = "w", title = "Book data for "+symbol)
-            BookBuilder.__book_files__[self.__output_path] = self.__book_file
+        self.__file_record_counter = BookBuilder.__book_files__.get(self.__output_path, None)
+        if not self.__file_record_counter:
+            h5_file = openFile(self.__output_path, mode = "w", title = "Book data")
+            BookBuilder.__book_files__[self.__output_path] = FileRecordCounter(h5_file)
+            self.__file_record_counter = BookBuilder.__book_files__[self.__output_path]
+
+        h5_file = self.__file_record_counter.h5_file
         filters = Filters(complevel=1, complib='zlib')
-        group = self.__book_file.createGroup("/", symbol, 'Book data')
-        self.__table = self.__book_file.createTable(group, 'books', BookTable, 
-                                                    "Data for "+str(symbol), filters=filters)
+        group = h5_file.createGroup("/", symbol, 'Book data')
+        self.__table = h5_file.createTable(group, 'books', BookTable, 
+                                           "Data for "+str(symbol), filters=filters)
         self.__tick_size = 100 # TODO
         self.__record = self.__table.row
-        self.__processed = 0
         self.__symbol = symbol
         self.__orders = {}
         self.__bids_to_qty = PriceOrderedDict(False)
@@ -221,9 +238,10 @@ class BookBuilder(object):
         self.__asks = zeros(shape=[__LEVELS__,2])
 
     def summary(self):
-        print "Outstanding orders: ", len(self.__orders)
-        print "Outstanding bids: ", len(self.__bids_to_qty)
-        print "Outstanding asks: ", len(self.__asks_to_qty)
+        print "Completed data for:", self.__symbol
+        print "\tOutstanding orders:", len(self.__orders)
+        print "\tOutstanding bids:", len(self.__bids_to_qty)
+        print "\tOutstanding asks:", len(self.__asks_to_qty)
 
 
     def make_record(self, ts, ts_s):
@@ -253,16 +271,15 @@ class BookBuilder(object):
         self.__record['timestamp_s'] = ts_s
 
         if self.__bids[0][0] and self.__asks[0][0] and (self.__bids[0][0] > self.__asks[0][0]):
-            print "Crossed at ", ts, ts_s
+            msg = ["Encountered Crossed Market", 
+                   "Bids: "+str(self.__bids), 
+                   "Asks: "+str(self.__asks)]
+            raise RuntimeError(string.join(msg, "\n\t"))
         
-
-        #print self.__symbol, "Bids", bidTopPx, "Asks", askTopPx, self.__record['bid'], self.__record['ask']
 
     def process_record(self, amd_record):
 
         if isinstance(amd_record, AddRecord):
-            #self.__record['symbol'] = amd_record.symbol
-            #print "Adding", amd_record.symbol, amd_record.order_id, amd_record.price[1], amd_record.quantity
             entry = (amd_record.price[1], amd_record.quantity)
             current = self.__orders.setdefault(amd_record.order_id, entry)
             if current != entry:
@@ -305,10 +322,7 @@ class BookBuilder(object):
 
         self.make_record(amd_record.timestamp, ascii_timestamp(amd_record.timestamp))
         self.__record.append()
-
-        self.__processed += 1
-        if 0 == self.__processed % __FLUSH_FREQ__:
-            self.__book_file.flush()
+        self.__file_record_counter.increment_count()
 
 class ArcaRecord(IsDescription):
     asc_ts      = StringCol(12)
@@ -472,18 +486,16 @@ files for symbols present in the raw data.
 
     if options.symbols:
         reText = r'\b(?:' + string.join(options.symbols, '|') + r')\b'
-        symbolText = '_' + re.sub(r'\W', '.', reText) + '_'
-        symbolRe = re.compile(reText)
+        symbol_text = '_' + re.sub(r'\W', '.', reText) + '_'
+        symbol_re = re.compile(reText)
     else:
-        symbolText = '_ALL_'
-        symbolRe = None
+        symbol_text = '_ALL_'
+        symbol_re = None
 
     for compressed_src in src_compressed_files:
-        if compressed_src.find('spy') < 0:
-            continue
-        parser = ArcaFixParser(compressed_src, get_date_of_file(compressed_src), 
-                               symbolText, symbolRe)
-        parser.parse()
-
-
-
+        date = get_date_of_file(compressed_src)
+        if date:
+        #if compressed_src.find('spy') < 0:
+        #    continue
+            parser = ArcaFixParser(compressed_src, date, symbol_text, symbol_re)
+            parser.parse()

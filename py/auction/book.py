@@ -3,7 +3,6 @@ from tables import *
 class BookTable(IsDescription):
     timestamp   = Int64Col()
     timestamp_s = StringCol(12)
-    symbol      = StringCol(8) 
     ask         = Int64Col(shape=(5,2))
     bid         = Int64Col(shape=(5,2))    
 
@@ -12,11 +11,11 @@ class Book(object):
     def __init__(self, record):
         self.__record = record
 
-    def symbol(self):
-        return self.__record['symbol']
-
     def timestamp(self):
         return self.__record['timestamp']
+
+    def timestamp_s(self):
+        return self.__record['timestamp_s']
 
     def top(self):
         return (self.__record['bid'][0], self.__record['ask'][0])
