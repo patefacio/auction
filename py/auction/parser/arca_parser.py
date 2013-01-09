@@ -2,26 +2,15 @@
 #
 # File: arca_parser.py
 #
-# Copyright (c) 2012 by First Class Software, Inc.
-#
-# All Rights Reserved. 
-#
-# Quote: There are only two kinds of programming languages: those people
-# always bitch about and those nobody uses. (Bjarne Stroustrup)
-#
 # Description: Parser for arca record data files
-#
-# History:
-#
-# date       user       comment
-# --------   --------   ------------------------------------------------------
-# 12/20/12   dbdavidson Initial Creation.
 #
 ##############################################################################
 from path import path
 from attribute import readable, writable
 from auction.paths import *
 from auction.book import Book, BookTable
+from auction.parser.parser_summary import ParseManager
+from auction.time_utils import *
 
 from tables import *
 from sets import Set
@@ -39,10 +28,17 @@ from numpy import zeros, array
 __PriceRe__ = re.compile(r"\s*(\d*)(?:\.(\d+))?\s*")
 __DateRe__ = re.compile(r"(\d\d\d\d)(\d\d)(\d\d)")
 __ARCA_SRC_PATH__ = COMPRESSED_DATA_PATH / 'arca'
-__FLUSH_FREQ__ = 1000
+__FLUSH_FREQ__ = 10000
 __LEVELS__ = 5
+__PX_MULTIPLIER__ = 1000000
+__PX_DECIMAL_DIGITS__ = 6
+__TICK_SIZE__ = 10000
 
 class PriceOrderedDict(object):
+    """
+    Dictionary with keys sorted by price - quite similar to effect of an
+    std::map.
+    """
     def __init__(self, ascending = True):
         self.d = {}
         self.L = []
@@ -83,64 +79,63 @@ class PriceOrderedDict(object):
             return self.L[-1]
 
 def get_date_of_file(fileName):
-    m = __DateRe__.search(fileName).groups()
+    """
+    Given a filename with a date in it (YYYYMMDD), parse out the date
+    Return None if no date present
+    """
+    m = __DateRe__.search(fileName)
     if m:
-        year, month, day = m
+        year, month, day = m.groups()
         return datetime.date(int(year), int(month), int(day))
     else:
         return None
 
-def make_timestamp(start_of_date_seconds, seconds, millis):
+def make_timestamp(start_of_date, seconds, millis):
+    """
+    Given a timestamp for start_of_date, calculate new timestamp given
+    additional seconds and millis.
+    """
     seconds = int(seconds)
     millis = int(millis)
-    return (start_of_date_seconds + seconds)*1000 + millis
+    return start_of_date + seconds*1000000 + millis*1000
 
-def ascii_timestamp(ts):
-    tmp = divmod(ts, 1000)
-    millis = str(int(tmp[1])).rjust(3,'0')
-    result = time.ctime(tmp[0])[-13:-5] + ':' + millis
-    return result
-
-# Given a price as a string converts to appropriate integer and decimal shift
 def int_price(px_str):
+    """
+    Given a price as a string, convert to an integer. All prices are stored as
+    64bit integers. The largest decimal I've encountered is 6 places, so all
+    prices are aligned to 6 decimals. Given an integer price px, then, the
+    quoted price would be px/1e6
+    """
     m = __PriceRe__.match(px_str)
     if not m:
         raise RuntimeError("Invalid price " + px_str)
     else:
         int_part, decimal_part = m.groups()
+
         if int_part == None or int_part == '':
             int_part = 0
         else:
             int_part = int(int_part)
 
-        len_decimal_part = decimal_part and len(decimal_part) or 0
-        if len_decimal_part == 4:
-            return (4, int_part*10000+int(decimal_part))
-        elif len_decimal_part == 2:
-            return (2, int_part*100+int(decimal_part))
-        elif len_decimal_part == 0:
-            return (0, int_part)
-        elif len_decimal_part == 3:
-            return (3, int_part*1000+int(decimal_part))
-        elif len_decimal_part == 1:
-            return (1, int_part*10+int(decimal_part))
-        elif len_decimal_part == 6:
-            return (6, int_part*1000000+int(decimal_part))
-        elif len_decimal_part == 5:
-            return (5, int_part*100000+int(decimal_part))
-        else:
-            raise RuntimeError("Invalid price format: " + px_str)
+        if not decimal_part:
+            decimal_part = "0"
+        
+        if len(decimal_part) > 6:
+            raise RuntimeError("Invalid price - more than 6 decimal places:" + px_str)
+
+        return int_part*__PX_MULTIPLIER__ + \
+            int(decimal_part.ljust(__PX_DECIMAL_DIGITS__, '0'))
 
 class AddRecord(object):
     r"""
-Single Add record
+Stores fields for single Add record
 """
 
     readable(seq_num=None, order_id=None, exchange=None, is_buy=None,
              quantity=None, symbol=None, price=None, 
              system_code=None, quote_id=None, timestamp=None)
 
-    def __init__(self, fields, start_of_date_seconds):
+    def __init__(self, fields, start_of_date):
         """
         fields - Line split by ',' (i.e. all fields)
         """
@@ -153,18 +148,18 @@ Single Add record
         self.__price = int_price(fields[7])
         self.__system_code = fields[10]
         self.__quote_id = fields[11]
-        self.__timestamp = make_timestamp(start_of_date_seconds, fields[8], fields[9])
+        self.__timestamp = make_timestamp(start_of_date, fields[8], fields[9])
 
 class DeleteRecord(object):
     r"""
-Single Delete record
+Stores fields for single Delete record
 """
 
     readable(seq_num=None, order_id=None, symbol=None, 
              exchange=None, system_code=None, quote_id=None,
              is_buy=None, timestamp=None) 
 
-    def __init__(self, fields, start_of_date_seconds):
+    def __init__(self, fields, start_of_date):
         """
         fields - Line split by ',' (i.e. all fields)
         """
@@ -175,16 +170,16 @@ Single Delete record
         self.__system_code = fields[7]        
         self.__quote_id = fields[8]
         self.__is_buy = fields[9] == 'B'
-        self.__timestamp = make_timestamp(start_of_date_seconds, fields[3], fields[4])
+        self.__timestamp = make_timestamp(start_of_date, fields[3], fields[4])
 
 class ModifyRecord(object):
     r"""
-Single Modify record
+Stores fields for single Modify record
 """
     readable(seq_num=None, order_id=None, quantity=None, price=None,
              symbol=None, quote_id=None, is_buy=None, timestamp=None) 
 
-    def __init__(self, fields, start_of_date_seconds):
+    def __init__(self, fields, start_of_date):
         """
         fields - Line split by ',' (i.e. all fields)
         """
@@ -195,40 +190,50 @@ Single Modify record
         self.__symbol = fields[7]  
         self.__quote_id = fields[10]
         self.__is_buy = fields[11] == 'B'
-        self.__timestamp = make_timestamp(start_of_date_seconds, fields[5], fields[6])
+        self.__timestamp = make_timestamp(start_of_date, fields[5], fields[6])
 
 class FileRecordCounter(object):
+    """
+    Periodically the file gets flushed. Flushing too frequently can hurt
+    performance. Multiple datasets are stored in a single file, so the count
+    is based on number of adds to *any* of the data sets.
+    """
     readable(h5_file = None, count = 0)
 
     def __init__(self, h5_file):
+        """
+        H5 file object to flush
+        """
         self.__h5_file = h5_file
         self.__count = 0
 
     def increment_count(self):
+        """
+        Increment counter and flush if __FLUSH_FREQ__ records have been added
+        """
         self.__count += 1
-        print "Incrementing counter ", self.__count
         if 0 == (self.__count % __FLUSH_FREQ__):
-            print "Calling flush"
             self.__h5_file.flush()
 
 class BookBuilder(object):
+    """
+    Processes Add/Modify/Delete records to build books per symbol
+    """
 
     __book_files__ = {}
 
-    def __init__(self, symbol, file_name):
-        self.__output_path = BOOK_DATA / file_name
-        self.__file_record_counter = BookBuilder.__book_files__.get(self.__output_path, None)
+    def __init__(self, symbol, h5_file):
+        self.__file_record_counter = BookBuilder.__book_files__.get(h5_file, None)
         if not self.__file_record_counter:
-            h5_file = openFile(self.__output_path, mode = "w", title = "Book data")
-            BookBuilder.__book_files__[self.__output_path] = FileRecordCounter(h5_file)
-            self.__file_record_counter = BookBuilder.__book_files__[self.__output_path]
+            BookBuilder.__book_files__[h5_file] = FileRecordCounter(h5_file)
+            self.__file_record_counter = BookBuilder.__book_files__[h5_file]
 
         h5_file = self.__file_record_counter.h5_file
         filters = Filters(complevel=1, complib='zlib')
         group = h5_file.createGroup("/", symbol, 'Book data')
         self.__table = h5_file.createTable(group, 'books', BookTable, 
                                            "Data for "+str(symbol), filters=filters)
-        self.__tick_size = 100 # TODO
+        self.__tick_size = __TICK_SIZE__ # TODO
         self.__record = self.__table.row
         self.__symbol = symbol
         self.__orders = {}
@@ -238,6 +243,9 @@ class BookBuilder(object):
         self.__asks = zeros(shape=[__LEVELS__,2])
 
     def summary(self):
+        """
+        Prints some summary information for a parse
+        """
         print "Completed data for:", self.__symbol
         print "\tOutstanding orders:", len(self.__orders)
         print "\tOutstanding bids:", len(self.__bids_to_qty)
@@ -245,20 +253,25 @@ class BookBuilder(object):
 
 
     def make_record(self, ts, ts_s):
-        bidTopPx = self.__bids_to_qty.top()
-        if bidTopPx:
-            for i, px in enumerate(range(bidTopPx, 
-                                         bidTopPx-__LEVELS__*self.__tick_size, 
+        """
+        A new record has been processed and the bids and asks updated
+        accordingly. This takes the new price data and updates the book and
+        timestamps for storing.
+        """
+        bid_top = self.__bids_to_qty.top()
+        if bid_top:
+            for i, px in enumerate(range(bid_top, 
+                                         bid_top-__LEVELS__*self.__tick_size, 
                                          -self.__tick_size)):
                 self.__bids[i][0] = px
                 self.__bids[i][1] = self.__bids_to_qty.get_quantity(px)
         else:
             self.__bids = zeros(shape=[__LEVELS__,2])
 
-        askTopPx = self.__asks_to_qty.top()
-        if askTopPx:
-            for i, px in enumerate(range(askTopPx, 
-                                         askTopPx+__LEVELS__*self.__tick_size, 
+        ask_top = self.__asks_to_qty.top()
+        if ask_top:
+            for i, px in enumerate(range(ask_top, 
+                                         ask_top+__LEVELS__*self.__tick_size, 
                                          self.__tick_size)):
                 self.__asks[i][0] = px
                 self.__asks[i][1] = self.__asks_to_qty.get_quantity(px)
@@ -270,17 +283,20 @@ class BookBuilder(object):
         self.__record['timestamp'] = ts
         self.__record['timestamp_s'] = ts_s
 
-        if self.__bids[0][0] and self.__asks[0][0] and (self.__bids[0][0] > self.__asks[0][0]):
-            msg = ["Encountered Crossed Market", 
-                   "Bids: "+str(self.__bids), 
-                   "Asks: "+str(self.__asks)]
-            raise RuntimeError(string.join(msg, "\n\t"))
-        
+        if bid_top and ask_top and bid_top >= ask_top:
+            msg = [(top_bid==top_ask and "Locked " or "Crossed "),
+                   "Market %s"%self.__symbol, 
+                   "Bids"+str(self.__bids), 
+                   "Asks"+str(self.__asks)]
+            raise RuntimeError(string.join(msg,':'))        
 
     def process_record(self, amd_record):
+        """
+        Incorporate the contents of the new record into the bids/asks
+        """
 
         if isinstance(amd_record, AddRecord):
-            entry = (amd_record.price[1], amd_record.quantity)
+            entry = (amd_record.price, amd_record.quantity)
             current = self.__orders.setdefault(amd_record.order_id, entry)
             if current != entry:
                 raise RuntimeError("Duplicate add for order: " + amd_record.order_id)
@@ -311,16 +327,18 @@ class BookBuilder(object):
 
             if amd_record.is_buy:
                 self.__bids_to_qty.update_quantity(current[0], -current[1])
-                self.__bids_to_qty.update_quantity(amd_record.price[1], amd_record.quantity)
+                self.__bids_to_qty.update_quantity(amd_record.price, amd_record.quantity)
             else:
                 self.__asks_to_qty.update_quantity(current[0], -current[1])
-                self.__asks_to_qty.update_quantity(amd_record.price[1], amd_record.quantity)
+                self.__asks_to_qty.update_quantity(amd_record.price, amd_record.quantity)
 
-            self.__orders[amd_record.order_id] = (amd_record.price[1], amd_record.quantity)
+            self.__orders[amd_record.order_id] = (amd_record.price, amd_record.quantity)
         else:
             raise RuntimeError("Invalid record: " + amd_record)
 
-        self.make_record(amd_record.timestamp, ascii_timestamp(amd_record.timestamp))
+        # bids and asks have been updated, now update the record and append to the table
+        self.make_record(amd_record.timestamp, 
+                         chicago_time_str(amd_record.timestamp))
         self.__record.append()
         self.__file_record_counter.increment_count()
 
@@ -342,9 +360,6 @@ Parse arca files and create book
 
 """
 
-    readable(input_path=None, output_path=None, symbol_match_re=None,
-             matched_symbols = Set([]), date=None, start_of_date_seconds=None,
-             book_builders=None) 
 
     def __init__(self, input_path, input_date, file_tag, symbol_match_re = None):
         """
@@ -356,89 +371,129 @@ Parse arca files and create book
         self.__input_path = input_path
         self.__date = input_date
         self.__file_tag = file_tag
-        self.__output_path = __ARCA_SRC_PATH__ / 'h5' / (str(self.__date) + file_tag + '.h5')
+        self.__output_base = __ARCA_SRC_PATH__ / 'h5' / (str(self.__date)+'_'+file_tag)
         self.__symbol_match_re = symbol_match_re
-        self.__start_of_date_seconds = time.mktime(self.__date.timetuple())
-        self.__book_builders = {}
+        self.__start_of_date = start_of_date(self.__date.year, self.__date.month,
+                                             self.__date.day, NY_TZ)
 
-        logging.info("Parsing file %s to create %s"% (self.__input_path, self.__output_path))
+        self.__book_builders = {}
 
         if not self.__input_path.exists():
             raise RuntimeError("Input path does not exist " + self.__input_path)
 
-    def parse(self, build_book = True):
-        print "Writing to ", self.__output_path
-        h5file = openFile(self.__output_path, mode = "w", title = "ARCA Equity Data")
-        filters = Filters(complevel=1, complib='zlib')
-        group = h5file.createGroup("/", 'AMD', 'Add-Modify-Delete data')
-        table = h5file.createTable(group, 'records', ArcaRecord, 
-                                   "Data for "+str(self.date), filters=filters)
-        h5Record = table.row
-        hitCount = 0
+    def parse(self, build_book = True, stop_early_at_hit=0):
+        """
+        Parse the input file. There are two modes: build_book=True and
+        build_book=False. If build_book=False, the h5 file is simply the same
+        record data from the gz file, but stored as hdf5. If build_book=True,
+        the hdf5 file created has book data for all matching inputs. Each
+        symbol gets it's own dataset.
 
-        for index, line in enumerate(gzip.open(self.input_path, 'rb')):
-            # if hitCount > 10000:
-            #     print "Done for now..."
-            #     pprint.pprint(self)
-            #     break 
+        The ParseManager is used to store summary information for the parse of
+        this data.
+        """
+        self.__output_path = self.__output_base + (build_book and ".h5" or "_AMD_.h5")
+        logging.info("Parsing file %s\n\tto create %s"% (self.__input_path, self.__output_path))
+        self.__h5_file = openFile(self.__output_path, mode = "w", title = "ARCA Equity Data")
+        if not build_book:
+            ## If not building book, then just writing out AMD data as hdf5
+            filters = Filters(complevel=1, complib='zlib')
+            group = self.__h5_file.createGroup("/", '_AMD_Data_', 'Add-Modify-Delete data')
+            table = self.__h5_file.createTable(group, 'records', ArcaRecord, 
+                                               "Data for "+str(self.__date), filters=filters)
+            h5Record = table.row
 
-            if 0 == (index % 1000000):
+        self.__parse_manager = ParseManager(self.__input_path, self.__h5_file)
+        self.__parse_manager.mark_start()
+
+        hit_count = 0
+        data_start_timestamp = None
+
+        for self.__line_number, line in enumerate(gzip.open(self.__input_path, 'rb')):
+
+            if stop_early_at_hit and hit_count > stop_early_at_hit:
+                break 
+
+            ###################################################
+            # Show progress periodically
+            ###################################################
+            if 0 == (self.__line_number % 1000000):
                 logging.info("At %d hit count is %d on %s" % 
-                             (index, hitCount, 
-                              (self.symbol_match_re and self.symbol_match_re.pattern or "*")))
+                             (self.__line_number, hit_count, 
+                              (self.__symbol_match_re and 
+                               self.__symbol_match_re.pattern or "*")))
 
             fields = line.split(',')
             code = fields[0]
             record = None
             if code == 'A':
-                record = AddRecord(fields, self.start_of_date_seconds)
+                record = AddRecord(fields, self.__start_of_date)
             elif code == 'D':
-                record = DeleteRecord(fields, self.start_of_date_seconds)
+                record = DeleteRecord(fields, self.__start_of_date)
             elif code == 'M':
-                record = ModifyRecord(fields, self.start_of_date_seconds)
+                record = ModifyRecord(fields, self.__start_of_date)
             elif code == 'I':
                 continue
             else:
                 raise RuntimeError("Unexpected record type '" + 
-                                   code + "' at line " + str(index) + 
+                                   code + "' at line " + str(self.__line_number) + 
                                    " of file " + self.__input_path)
 
-            if self.symbol_match_re and not self.symbol_match_re.search(record.symbol):
+            if self.__symbol_match_re and \
+                    not self.__symbol_match_re.search(record.symbol):
                 continue
             else:
-                hitCount += 1
+                hit_count += 1
 
-                self.matched_symbols.add(record.symbol)
+                # record the timestamp of the first record as data_start
+                if not data_start_timestamp:
+                    data_start_timestamp = record.timestamp
 
                 if build_book:
                     self.build_books(record)
                 else:
                     h5Record['ts'] = record.timestamp
-                    h5Record['asc_ts'] = ascii_timestamp(record.timestamp)
+                    h5Record['asc_ts'] = chicago_time_str(record.timestamp)
                     h5Record['symbol'] = record.symbol
                     h5Record['seq_num'] = record.seq_num
                     h5Record['order_id'] = record.order_id
                     h5Record['record_type'] = code
                     h5Record['buy_sell'] = (record.is_buy and 'B' or 'S')
                     if code != 'D':
-                        h5Record['price'] = record.price[1]
+                        h5Record['price'] = record.price
                         h5Record['quantity'] = record.quantity
 
                     h5Record.append()
 
-                    if 0 == index % __FLUSH_FREQ__:
+                    if 0 == self.__line_number % __FLUSH_FREQ__:
                         table.flush()
 
-        for symbol, builder in self.book_builders.iteritems():
+        for symbol, builder in self.__book_builders.iteritems():
             builder.summary()
 
-    def build_books(self, record):
-        builder = self.book_builders.get(record.symbol, None)
-        if not builder:
-            builder = BookBuilder(record.symbol, "book_" + self.__file_tag + ".h5")
-            self.book_builders[record.symbol] = builder
+        ############################################################
+        # Finish filling in the parse summary info and close up
+        ############################################################
+        self.__parse_manager.data_start(data_start_timestamp)
+        self.__parse_manager.data_stop(record.timestamp)
+        self.__parse_manager.processed(self.__line_number+1)
+        self.__parse_manager.mark_stop(True)
+        self.__h5_file.close()
 
-        builder.process_record(record)
+
+    def build_books(self, record):
+        """
+        Dispatch the new record to the appropriate BookBuilder for the symbol
+        """
+        builder = self.__book_builders.get(record.symbol, None)
+        if not builder:
+            builder = BookBuilder(record.symbol, self.__h5_file)
+            self.__book_builders[record.symbol] = builder
+
+        try:
+            builder.process_record(record)
+        except Exception,e:
+            self.__parse_manager.warning(record.symbol +': ' + e.message, self.__line_number+1)
             
 
 if __name__ == "__main__":
@@ -484,18 +539,24 @@ files for symbols present in the raw data.
     else:
         src_compressed_files = __ARCA_SRC_PATH__.files()
 
-    if options.symbols:
-        reText = r'\b(?:' + string.join(options.symbols, '|') + r')\b'
-        symbol_text = '_' + re.sub(r'\W', '.', reText) + '_'
-        symbol_re = re.compile(reText)
-    else:
-        symbol_text = '_ALL_'
-        symbol_re = None
+    symbol_text = None
+    if not options.symbols:
+        options.symbols = [ 
+            'SPY', 'DIA', 'QQQ', 
+            'XLK', 'XLF', 'XLP', 'XLE', 'XLY', 'XLV', 'XLB',
+            'CSCO','MSFT', 'HD', 'LOW',
+            ]
+        symbol_text = 'BASKET'
+
+    options.symbols.sort()
+    re_text = r'\b(?:' + string.join(options.symbols, '|') + r')\b'
+    symbol_re = re.compile(re_text)
+    if not symbol_text:
+        symbol_text = string.join(options.symbols, '_')
 
     for compressed_src in src_compressed_files:
+        print "Examining", compressed_src.basename()
         date = get_date_of_file(compressed_src)
         if date:
-        #if compressed_src.find('spy') < 0:
-        #    continue
             parser = ArcaFixParser(compressed_src, date, symbol_text, symbol_re)
-            parser.parse()
+            parser.parse(True, 5000)

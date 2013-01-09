@@ -1,6 +1,9 @@
-from auction.parser.arca_parser import intPrice
+from auction.parser.arca_parser import int_price
 
 def testIntPrice():
-    assert((2, 20020) == intPrice("200.20"))
-    assert((4, 2000) == intPrice(".2000"))
-    assert((0, 11) == intPrice("11"))
+    assert(200200000 == int_price("200.20"))
+    assert(200000 == int_price(".2000"))
+    assert(200000 == int_price("0.2000"))
+    assert(1200000 == int_price("1.2000"))
+    assert(11000000 == int_price("11"))
+    assert(3140000 == int_price("3.14"))
