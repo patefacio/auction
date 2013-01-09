@@ -1,0 +1,419 @@
+#+TITLE: Review of Code
+#+OPTIONS: toc:nil
+#+OPTIONS: ^:{}
+#+LaTeX_HEADER: \usepackage{listings}
+#+LaTeX_HEADER:\usepackage[margin=0.5in]{geometry}
+#+LaTeX_HEADER: \usepackage{mempatch}
+#+LaTeX_HEADER: \usepackage{color}
+#+LaTeX_HEADER: \lstset{frame=shadowbox, rulesepcolor=\color{blue}}
+#+LaTeX_HEADER: \definecolor{bluekeywords}{rgb}{0.13,0.13,1}
+#+LaTeX_HEADER: \definecolor{greencomments}{rgb}{0,0.5,0}
+#+LaTeX_HEADER: \definecolor{redstrings}{rgb}{0.9,0,0}
+#+LaTeX_HEADER: \definecolor{bgcol}{rgb}{0.98,0.98,0.98}
+#+LaTeX_HEADER: \lstdefinelanguage{D} {morekeywords={abstract,alias,align,asm,assert,auto,body,bool,break,byte,case,cast,catch,cdouble,cent,cfloat,char,class,const,continue,creal,dchar,debug,default,delegate,delete,deprecated,do,double,else,enum,export,extern,false,final,finally,float,for,foreach,foreach_reverse,function,goto,idouble,if,ifloat,immutable,import,in,inout,int,interface,invariant,ireal,is,lazy,long,macro,mixin,module,new,nothrow,null,out,override,package,pragma,private,protected,public,pure,real,ref,return,scope,shared,short,static,struct,super,switch,synchronized,template,this,throw,true,try,typedef,typeid,typeof,ubyte,ucent,uint,ulong,union,unittest,ushort,version,void,volatile,wchar,while,with,__FILE__,__LINE__,__gshared,__thread,__traits}, sensitive=false,morecomment=[l]{//},morecomment=[s]{/*}{*/},morestring=[b]", morestring=[d]', alsoletter={.}}
+#+LaTeX_HEADER: \lstset{morekeywords={class,private,public,protected,import,assert},basicstyle=\footnotesize\ttfamily,showspaces=false,showtabs=false,,breaklines=true,showstringspaces=false,breakatwhitespace=true,commentstyle=\color{greencomments},keywordstyle=\color{bluekeywords},stringstyle=\color{redstrings},backgroundcolor=\color{bgcol}}
+#+FILETAGS: :DOCONLY:@work
+
+* Primary Scripts
+
+  The following are my notes and thoughts on the code I'm reviewing.
+
+** master_script.sh
+    
+    The main driver. This is a shell script (not Perl) and it is 410
+    lines. You edit the file to specify what you want done.  For
+    example inside the file there are options for:
+                                                                    
+    | DO_DOWNLOAD_NYSE_ARCA     | 0 |
+    | DO_DOWNLOAD_CME_GLOBEX    | 0 |
+    | ...                       |   |
+    | DO_TRANSLATE_CME_GLOBEX_3 | 0 |
+    | DO_MERGE_SPY_ES           | 0 |
+
+
+    They are all 0 and you turn on the one you want to do and then run
+    the script. It looks like this main script simply calls out to
+    other scripts/exe's etc to do the real work. The following
+    functions seem to be covered:
+                                                                    
+    - /Downloading/: Straightforward approach for getting files from
+      NYSE.  It calls out to linux =wget= passing it the required URLs
+      to download the files. It is reproducible. According to the
+      script documentation, the download of CME files was a one time
+      event. (This may be limiting depending on how long this project
+      or future projects last).
+      
+    - /Translating/: The process of reading large data file(s) from
+      the exchange and outputing text comma separated line by line
+      book record files. It looks like there is support for:
+      - NYSE_ARCA: Calls out to =arca_depth_translate.pl= (615 line
+        Perl script) to transform the downloaded data into a book
+        format.
+      - CME_GLOBEX_1: Calls out to script =cme_rlc1_translate.pl= (532
+        line Perl script). This looks like it parses GLOBEX RLC
+        records - which are the full order book feeds. I don't think
+        this feed is applicable to HFT - at least it is not what I've
+        used - (see below).
+      - CME_GLOBEX_2: Calls out to script
+        =cme_rlc1_translate.pl=. This looks like it parses GLOBEX RLC
+        records - which are the full order book feeds. I don't think
+        this feed is applicable HFT.
+      - CME_GLOBEX_3: Calls out to script =cme_depth_translate.pl=
+        (592 line Perl script). This parses raw CME GLOBEX fix
+        records. 
+
+      Note: Regarding RLC - a google search reveals: 
+
+#+BEGIN_VERSE
+        http://www.cmegroup.com/tools-information/lookups/advisories/market-data/Q2009-074.html
+
+          In 2007, CME Group introduced FIX/FAST and began a project
+          to eliminate the legacy RLC and ITC formats of market data.
+          RLC was successfully eliminated at the end of 2008, while
+          the ITC elimination is the next and final milestone in this
+          project.  As a reminder, all CME Group Quote Vendors that
+          currently use the legacy ITC 2.1 format of market data will
+          be required to complete the conversion to FIX/FAST within
+          2009.
+#+END_VERSE
+
+       
+
+    - /Merging/: This takes files from one download data source and
+      merges it with another. It looks like it incorporates
+      differences in timezones, which is important. It is written for
+      merging SPY and ES. The script it calls out to is
+      =merge_spy_es.pl= (a 299 line Perl script). I imagine this is
+      the first merge script written (and maybe only so far). The
+      natural tendency with a first is to get specific to the current
+      problem. In this case tying it to SPY and ES is natural but
+      undesirable in the long run. In other words, merging datasets is
+      a general problem. Similary merging just two datasets is not
+      general enough - especially when dealing with large data. The
+      obvious approach should allow for:
+
+      =merge(list_of_datasets)=
+
+
+      e.g. =merge([SPY_2012_6_3, ES_2012_6_3, RSP_2012_6_6])=
+
+
+      e.g. =merge([LOW_2012_6_3, HD_2012_6_3])=
+
+      It looks like the logic compares timestamps from ES and SPY and
+      based on which comes first it writes that record's data. Unless
+      I'm missing something - I don't see how it does not break if the
+      timestamps are equal, maybe it never happens but it could.
+
+      A different, but common, approach for the timestamp issues is
+      when building the books for archive purposes (e.g. in this setup
+      the /translate/ phase), go ahead and store it in a specific
+      timezone (as opposed to its natural time zone). For instance, if
+      you view Chicago as the /Center of the Universe/, when writing
+      out the timestamps just do the conversion and write them in
+      Chicago time. Or even more common write them out as Greenwich
+      Mean Time or UTC. Then downstream functionality like merge does
+      not need to mess with conversion repeatedly.
+
+    - /Analysis/: The =master_script.sh= script includes /stubs/ for
+      this but no real call out to analysis scripts. Perhaps over time
+      the master script was not the best place to call out for
+      analysis and it turned out that each analysis called for a fresh
+      directory and fresh set of scripts to do the specifics.
+                                                                    
+                                                                    
+** cme_depth_translate.pl
+   
+   This is the script that takes in files downloaded from CME and
+   creates a text file with book messages. According to the script
+   docs, the output is:
+   
+#+BEGIN_VERSE
+    Output:
+        A time series of order book states for the SYMBOL and DEPTH. Fields are tab
+        delimited. Output depth is the command line depth up to the max depth of the
+        book (for ES, that's 10). This gives the number of BID and ASK fields that
+        follow. e.g. if output DEPTH = 3, there are 6 bid fields, 6 ask fields, and a
+        total of 16 fields.
+
+        <SYMBOL> <DATE+TIME> <EXCHANGE> <DEPTH> <BID PRICE 1> <BID SIZE 1> ... 
+        <ASK PRICE 1> <ASK SIZE 1> ...
+#+END_VERSE   
+
+  The parsing logic parses the each line of fix records and pulls out
+  data regarding a specific set of FIX tags, focusing on these tags:
+
+#+BEGIN_SRC C
+
+my %cmefix = (
+    'SecurityIDSource'  => 22,
+    'MsgSeqNum'         => 34,
+    'MsgType'           => 35,
+    'SecurityID'        => 48,
+    '_DateTime'         => 52,
+    'RptSeq'            => 83,
+    '_Symbol'           => 107,
+    'MarketDepth'       => 264,
+    'NoMDEntries'       => 268,
+    'MDEntryType'       => 269,
+    'MDEntryPx'         => 270,
+    'MDEntrySize'       => 271,
+    'MDEntryTime'       => 273,
+    'QuoteCondition'    => 276,
+    'MDUpdateAction'    => 279,
+    'TradingSessionID'  => 336,
+    'NumberOfOrders'    => 346,
+    'MDPriceLevel'      => 1023,
+    'MDQuoteType'       => 1070,
+);
+
+#+END_SRC
+
+  The extent to which this parsing is accurate would require a
+  mini-project. As a first step, a small repository of sanity checks
+  would be useful (ensure books are valid on write).
+
+  John: This is very similar to the IOM file. It lends itself
+  extremely well to hdf5. I don't know if you remember it was either
+  10 or 100x speed improvement when we switched from IOM to hdf5. I
+  would advocate it not only for speed, but it forces a common data
+  structure that is not dictated by a file format - but rather
+  dictates the format.
+
+* Other Scripts
+
+  It looks like there are a few scripts that are used to calculate
+  various aggregates like:
+
+  =[count, sum, max, min, mean, std err, corr, cov]=
+
+  I think these should be avoided. I did not find the /analysis/
+  scripts in /scripts/ folder. I believe they once were there because
+  if I randomly go into an analysis folder:
+
+  =/datastore/analysis/20120226= I can see a =cmd= script used to
+  generate the data in the folder. The way it does it is this type of
+  script:
+
+#+BEGIN_SRC shell
+
+ zcat ../merge/NYES_ARCA.CME_GLOBEX.SPY_ES_MERGED.20100503.gz | 
+   perl -e  while(<>) {chomp; @cols = split("\t"); 
+            print join("\t",(@cols[5..6], 
+                             @cols[9..10], 
+                             @cols[14..15], 
+                             @cols[18..19], 
+                             "X",
+                             "X",
+                             $cols[0]))."\n"; } | 
+   perl /datastore/scripts/calc_arb_spy_es.pl | grep -v '==' > test.1
+
+#+END_SRC
+
+  The script was a one liner - so the formatting I added. Note how it
+  calls out to 
+  
+
+  =/datastore/scripts/calc_arb_spy_es.pl=. 
+
+  But, that file is not at that location any longer. In a folder
+  called =svn_old= I found =calc_mle_offset.pl= for example which does
+  use one of these utility scripts =mmms.pl=. For example it has a
+  routine called =do_mms= which calls out to another process:
+
+#+BEGIN_SRC shell
+  my $mmms = `zcat $mergefile | 
+      perl $scripts/calc_spread_spy_es.pl | 
+      cut -f4 | 
+      perl $scripts/mmms.pl | 
+      tail -1`;
+#+END_SRC
+
+   Again that is a one-liner, I added the formatting. And it actually
+   calls out to 4 processes to get some aggregates. This is the type
+   of thing that in Python would look like this and not call out to
+   any processes (very expensive), actually the implementation is
+   likely optimized C, and uses battle tested code.
+
+#+BEGIN_SRC python
+   describe(x)
+#+END_SRC   
+
+** cov.pl
+   
+   Effectively splits tab delimited data into a 2D array and /hand
+   calculates/ the covariance.
+
+** corr.pl
+   
+   Copy paste of cov but generates the covariance
+
+** mmms.pl
+
+   Generates the remaining aggregates of a 1D array.
+
+
+* Proposal
+
+  Ok - so I'm not a fan of Perl - it is largely thought of as a
+  /write-once read never/ or /write-only/ language.
+
+  http://geekandpoke.typepad.com/geekandpoke/2008/07/one-day-in-the.html
+
+  That said, I think there is some good code here and clearly lots of
+  thought and effort put into it.
+
+  A better set up for analysis, however, is python with /numpy/,
+  /scipy/ and with HDF5 support via /tables/. As it stands, the idea
+  of a book is amorphous in the current setup. It is "understood" and
+  the only formalization of it is in the format of the output
+  translated files. A more formal specification of a book would be:
+
+#+BEGIN_SRC python
+
+import tables
+
+class BookTable(IsDescription):
+    timestamp   = Int64Col()
+    symbol      = StringCol(8) 
+    ask         = Int64Col(shape=(5,2))
+    bid         = Int64Col(shape=(5,2))    
+
+#+END_SRC
+
+  This makes it somewhat clear that there is a timestamp, a symbol,
+  and two arrays of bid and ask values. The (5,2) is for a typical 5
+  level deep book with 2 fields one for price and one for volume at
+  the price. Note: timestamps are int64 so microseconds are easily
+  covered, prices and volumes are ints. Whenever calculations are done
+  the prices will become floats.
+
+  Given this definition of a book structure in an HDF5 table, the
+  following is a reasonable wrapper for the type of access we would
+  need.
+
+#+BEGIN_SRC python
+
+class Book(object):
+    
+    def __init__(self, record):
+        self.__record = record
+
+    def symbol(self):
+        return self.__record['symbol']
+
+    def timestamp(self):
+        return self.__record['timestamp']
+
+    def top(self):
+        return (self.__record['bid'][0], self.__record['ask'][0])
+
+    def topPx(self):
+        return (self.__record['bid'][0][0], self.__record['ask'][0][0])
+
+    def mid(self): 
+        t = self.topPx()
+        return (t[0] + t[1]/2.0)
+
+    def topQty(self):
+        return (self.__record['bid'][0][1], self.__record['ask'][0][1])
+
+    def level(self, i):
+        return (self.__record['bid'][i], self.__record['ask'][i])
+
+#+END_SRC
+
+   Now given a book record, you can easily access the symbol,
+   timestamp, and all fields in the book. =top= returns top bid and
+   ask arrays of price and quantity. To deal only in price, look at
+   =topPx=. To look at any level, select the desired level with
+   =level=.
+
+   Relating prices with a natural relationship between quantity and
+   price (e.g. ES and SPY, QQQ and NQ) should be done somewhere in
+   code one time (i.e. DRY Do Not Repeat Yourself).
+
+   Here is an example of writing to a file called "book.h5". It opens
+   the file, takes a starting price ($100) and randomly adjusts the
+   price (up or down with 50% probability - a uniform amount between 0
+   and 9). Hopefully it makes sense - the bid side book prices
+   decrease, the ask side book prices increase. I'm just sticking
+   silly data in for the quantities. This is just to show how easy it
+   is to get data into the book format. The real benefit is on the
+   read side.
+
+#+BEGIN_SRC python
+
+filename = "book.h5"
+h5file = openFile(filename, mode = "w", title = "My es book data for 2001/1/1")
+group = h5file.createGroup("/", 'ES', 'Market book data')
+table = h5file.createTable(group, 'es_book', BookTable, "2001/1/1")
+book = table.row
+
+current = 100
+for i in xrange(10):
+    book['timestamp'] = int(time.time()*10e6)
+    book['symbol']  = 'ES'
+    book['bid'] = array([ 
+        [ current, 2*i ],
+        [ current-1, 2*i ],
+        [ current-2, 2*i ],
+        [ current-3, 2*i ],
+        [ current-4, 2*i ],
+        ])
+
+    book['ask'] = array([ 
+        [ current+1, 2*i ],
+        [ current+2, 2*i ],
+        [ current+3, 2*i ],
+        [ current+4, 2*i ],
+        [ current+5, 2*i ],
+        ])
+
+    current = current + ((random()<0.5) and int(random()*10) or -int(random()*10))
+    book.append()
+
+#+END_SRC
+
+   Now that the file is written it can easily be read. This shows
+   opening the file, iterating over the data in order.
+
+#+BEGIN_SRC python
+f=tables.openFile(filename)
+mid_px = []
+for record in f.root.ES.es_book[:]:
+    b = Book(record)
+    mid_px.append(b.mid())
+    print "TOP: time(%d) %s Px:" % (b.timestamp(), \
+          b.symbol()), b.topPx(),"\tQty: ", b.topQty()
+    
+print describe(array(mid_px))
+
+#+END_SRC
+
+   This piece of code appends the midpoint prices (unweighted) to the
+   list of prices. For each entry it prints some data. Then it gets
+   and prints the general statistics of the midpoint prices. The
+   output is:
+
+
+#+BEGIN_VERSE
+TOP: time(13549042913475180) ES Px: (100, 101) 	mid: 100.5 	Qty:  (0, 0)
+TOP: time(13549042913476120) ES Px: (95, 96) 	mid: 95.5 	Qty:  (2, 2)
+TOP: time(13549042913476600) ES Px: (100, 101) 	mid: 100.5 	Qty:  (4, 4)
+TOP: time(13549042913477060) ES Px: (101, 102) 	mid: 101.5 	Qty:  (6, 6)
+TOP: time(13549042913477530) ES Px: (99, 100) 	mid: 99.5 	Qty:  (8, 8)
+TOP: time(13549042913477990) ES Px: (98, 99) 	mid: 98.5 	Qty:  (10, 10)
+TOP: time(13549042913478450) ES Px: (91, 92) 	mid: 91.5 	Qty:  (12, 12)
+TOP: time(13549042913478900) ES Px: (87, 88) 	mid: 87.5 	Qty:  (14, 14)
+TOP: time(13549042913479360) ES Px: (89, 90) 	mid: 89.5 	Qty:  (16, 16)
+TOP: time(13549042913479820) ES Px: (97, 98) 	mid: 97.5 	Qty:  (18, 18)
+(10, (87.5, 101.5), 96.200000000000003, 25.122222222222224, -0.6559731950899204, -1.0723192976066085)
+#+END_VERSE
+
+   =describe= is a standard well documented function. The results are:
+
+   =(count, (min,max), mean, unbiased var, biased skew, biased kurtosis)=
+
+   
+  
