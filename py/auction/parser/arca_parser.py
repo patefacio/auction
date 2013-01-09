@@ -220,6 +220,8 @@ class BookBuilder(object):
     Processes Add/Modify/Delete records to build books per symbol
     """
 
+    readable(unchanged=0)
+
     __book_files__ = {}
 
     def __init__(self, symbol, h5_file):
@@ -241,6 +243,8 @@ class BookBuilder(object):
         self.__asks_to_qty = PriceOrderedDict()
         self.__bids = zeros(shape=[__LEVELS__,2])
         self.__asks = zeros(shape=[__LEVELS__,2])
+        self.__unchanged = 0
+
 
     def summary(self):
         """
@@ -250,6 +254,12 @@ class BookBuilder(object):
         print "\tOutstanding orders:", len(self.__orders)
         print "\tOutstanding bids:", len(self.__bids_to_qty)
         print "\tOutstanding asks:", len(self.__asks_to_qty)
+        print "\tUnchanged:", self.__unchanged
+        # Any left over data and this was not a success
+        if len(self.__orders) or len(self.__bids_to_qty) or len(self.__asks_to_qty):
+            return False
+        else:
+            return True
 
 
     def make_record(self, ts, ts_s):
@@ -258,6 +268,9 @@ class BookBuilder(object):
         accordingly. This takes the new price data and updates the book and
         timestamps for storing.
         """
+        previous_bids = self.__bids.copy()
+        previous_asks = self.__asks.copy()
+
         bid_top = self.__bids_to_qty.top()
         if bid_top:
             for i, px in enumerate(range(bid_top, 
@@ -284,11 +297,16 @@ class BookBuilder(object):
         self.__record['timestamp_s'] = ts_s
 
         if bid_top and ask_top and bid_top >= ask_top:
-            msg = [(top_bid==top_ask and "Locked " or "Crossed "),
+            msg = [((bid_top==ask_top) and "Locked " or "Crossed "),
                    "Market %s"%self.__symbol, 
-                   "Bids"+str(self.__bids), 
-                   "Asks"+str(self.__asks)]
+                   str((bid_top, ask_top))]
             raise RuntimeError(string.join(msg,':'))        
+
+        if (self.__bids == previous_bids).all() and (self.__asks == previous_asks).all():
+            self.__unchanged += 1
+        else:
+            self.__record.append()
+        
 
     def process_record(self, amd_record):
         """
@@ -310,7 +328,7 @@ class BookBuilder(object):
             assert(amd_record.symbol == self.__symbol)
             current = self.__orders.get(amd_record.order_id, None)
             if not current:
-                raise "Record not found for delete: " + amd_record.order_id
+                raise RuntimeError("Record not found for delete: " + amd_record.order_id)
 
             if amd_record.is_buy:
                 self.__bids_to_qty.update_quantity(current[0], -current[1])
@@ -323,7 +341,7 @@ class BookBuilder(object):
             assert(amd_record.symbol == self.__symbol)
             current = self.__orders.get(amd_record.order_id, None)
             if not current:
-                raise "Record not found for modify: " + amd_record.order_id
+                raise RuntimeError("Record not found for modify: " + amd_record.order_id)
 
             if amd_record.is_buy:
                 self.__bids_to_qty.update_quantity(current[0], -current[1])
@@ -339,7 +357,6 @@ class BookBuilder(object):
         # bids and asks have been updated, now update the record and append to the table
         self.make_record(amd_record.timestamp, 
                          chicago_time_str(amd_record.timestamp))
-        self.__record.append()
         self.__file_record_counter.increment_count()
 
 class ArcaRecord(IsDescription):
@@ -411,7 +428,7 @@ Parse arca files and create book
 
         for self.__line_number, line in enumerate(gzip.open(self.__input_path, 'rb')):
 
-            if stop_early_at_hit and hit_count > stop_early_at_hit:
+            if stop_early_at_hit and hit_count == stop_early_at_hit:
                 break 
 
             ###################################################
@@ -468,17 +485,22 @@ Parse arca files and create book
                     if 0 == self.__line_number % __FLUSH_FREQ__:
                         table.flush()
 
+        books_good = True
+        total_unchanged = 0
         for symbol, builder in self.__book_builders.iteritems():
-            builder.summary()
+            books_good = books_good and builder.summary()
+            total_unchanged += builder.unchanged
 
         ############################################################
         # Finish filling in the parse summary info and close up
         ############################################################
         self.__parse_manager.data_start(data_start_timestamp)
         self.__parse_manager.data_stop(record.timestamp)
+        self.__parse_manager.irrelevants(total_unchanged)
         self.__parse_manager.processed(self.__line_number+1)
-        self.__parse_manager.mark_stop(True)
+        self.__parse_manager.mark_stop(books_good)
         self.__h5_file.close()
+        ParseManager.summarize_file(self.__output_path)
 
 
     def build_books(self, record):
@@ -546,7 +568,7 @@ files for symbols present in the raw data.
             'XLK', 'XLF', 'XLP', 'XLE', 'XLY', 'XLV', 'XLB',
             'CSCO','MSFT', 'HD', 'LOW',
             ]
-        symbol_text = 'BASKET'
+        symbol_text = 'ETF_CSCO_MSFT_HD_LOW'
 
     options.symbols.sort()
     re_text = r'\b(?:' + string.join(options.symbols, '|') + r')\b'
@@ -559,4 +581,5 @@ files for symbols present in the raw data.
         date = get_date_of_file(compressed_src)
         if date:
             parser = ArcaFixParser(compressed_src, date, symbol_text, symbol_re)
-            parser.parse(True, 5000)
+            #parser.parse(True, 50000)
+            parser.parse(True)

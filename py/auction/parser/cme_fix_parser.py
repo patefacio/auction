@@ -2,20 +2,7 @@
 #
 # File: cme_fix_parser.py
 #
-# Copyright (c) 2012 by First Class Software, Inc.
-#
-# All Rights Reserved. 
-#
-# Quote: There are only two kinds of programming languages: those people
-# always bitch about and those nobody uses. (Bjarne Stroustrup)
-#
 # Description: Parser for cme fix files
-#
-# History:
-#
-# date       user       comment
-# --------   --------   ------------------------------------------------------
-# 12/20/12   dbdavidson Initial Creation.
 #
 ##############################################################################
 from path import path
