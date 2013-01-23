@@ -29,7 +29,7 @@ __PriceRe__ = re.compile(r"\s*(\d*)(?:\.(\d+))?\s*")
 __DateRe__ = re.compile(r"(\d\d\d\d)(\d\d)(\d\d)")
 __ARCA_SRC_PATH__ = COMPRESSED_DATA_PATH / 'arca'
 __FLUSH_FREQ__ = 10000
-__LEVELS__ = 5
+__LEVELS__ = 10
 __PX_MULTIPLIER__ = 1000000
 __PX_DECIMAL_DIGITS__ = 6
 __TICK_SIZE__ = 10000
@@ -564,11 +564,24 @@ files for symbols present in the raw data.
     symbol_text = None
     if not options.symbols:
         options.symbols = [ 
+            # Index ETFs
             'SPY', 'DIA', 'QQQ', 
+            # Sectors
             'XLK', 'XLF', 'XLP', 'XLE', 'XLY', 'XLV', 'XLB',
-            'CSCO','MSFT', 'HD', 'LOW',
+            # Vanguard
+            'VCR', 'VDC', 'VHT', 'VIS', 'VAW', 'VNQ', 'VGT', 'VOX', 'VPU',
+            # Energy
+            'XOM', 'RDS', 'BP',
+            # Home Improvement
+            'HD', 'LOW', 'XHB', 
+            # Banks
+            'MS', 'GS', 'BAC', 'JPM', 'C', 
+            # Exchanges
+            'CME', 'NYX',
+            # Big Techs
+            'AAPL', 'MSFT', 'GOOG', 'CSCO'
             ]
-        symbol_text = 'ETF_CSCO_MSFT_HD_LOW'
+        symbol_text = 'MOTLEY_10Lev'
 
     options.symbols.sort()
     re_text = r'\b(?:' + string.join(options.symbols, '|') + r')\b'

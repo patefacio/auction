@@ -3,8 +3,8 @@ from tables import *
 class BookTable(IsDescription):
     timestamp   = Int64Col()
     timestamp_s = StringCol(16)
-    ask         = Int64Col(shape=(5,2))
-    bid         = Int64Col(shape=(5,2))    
+    ask         = Int64Col(shape=(10,2))
+    bid         = Int64Col(shape=(10,2))    
 
 class Book(object):
     
