@@ -14,6 +14,7 @@ from auction.time_utils import *
 
 from tables import *
 from sets import Set
+from auction.parser.utils import PriceOrderedDict, FileRecordCounter, BookBuilder
 import os
 import zipfile
 import re
@@ -33,50 +34,6 @@ __LEVELS__ = 10
 __PX_MULTIPLIER__ = 1000000
 __PX_DECIMAL_DIGITS__ = 6
 __TICK_SIZE__ = 10000
-
-class PriceOrderedDict(object):
-    """
-    Dictionary with keys sorted by price - quite similar to effect of an
-    std::map.
-    """
-    def __init__(self, ascending = True):
-        self.d = {}
-        self.L = []
-        self.ascending = ascending
-        self.sorted = True
-    
-    def __len__(self):
-        return len(self.L)
-
-    def get_quantity(self, px):
-        return self.d.get(px, 0)
-
-    def update_quantity(self, px, q):
-        assert(q!=0)
-        assert(len(self.L) == len(self.d))
-        qty = self.d.get(px)
-        if qty:
-            qty += q
-            if qty:
-                self.d[px] = qty
-            else:
-                del self.d[px]
-                self.L.remove(px)
-        else:
-            self.L.append(px)
-            self.sorted = False
-            self.d[px] = q
-
-    def top(self):
-        if not self.sorted:
-            self.L.sort()
-            self.sorted = True
-        if 0 == len(self.L):
-            return None
-        if self.ascending:
-            return self.L[0]
-        else:
-            return self.L[-1]
 
 def get_date_of_file(fileName):
     """
@@ -192,172 +149,6 @@ Stores fields for single Modify record
         self.__is_buy = fields[11] == 'B'
         self.__timestamp = make_timestamp(start_of_date, fields[5], fields[6])
 
-class FileRecordCounter(object):
-    """
-    Periodically the file gets flushed. Flushing too frequently can hurt
-    performance. Multiple datasets are stored in a single file, so the count
-    is based on number of adds to *any* of the data sets.
-    """
-    readable(h5_file = None, count = 0)
-
-    def __init__(self, h5_file):
-        """
-        H5 file object to flush
-        """
-        self.__h5_file = h5_file
-        self.__count = 0
-
-    def increment_count(self):
-        """
-        Increment counter and flush if __FLUSH_FREQ__ records have been added
-        """
-        self.__count += 1
-        if 0 == (self.__count % __FLUSH_FREQ__):
-            self.__h5_file.flush()
-
-class BookBuilder(object):
-    """
-    Processes Add/Modify/Delete records to build books per symbol
-    """
-
-    readable(unchanged=0)
-
-    __book_files__ = {}
-
-    def __init__(self, symbol, h5_file):
-        self.__file_record_counter = BookBuilder.__book_files__.get(h5_file, None)
-        if not self.__file_record_counter:
-            BookBuilder.__book_files__[h5_file] = FileRecordCounter(h5_file)
-            self.__file_record_counter = BookBuilder.__book_files__[h5_file]
-
-        h5_file = self.__file_record_counter.h5_file
-        filters = Filters(complevel=1, complib='zlib')
-        group = h5_file.createGroup("/", symbol, 'Book data')
-        self.__table = h5_file.createTable(group, 'books', BookTable, 
-                                           "Data for "+str(symbol), filters=filters)
-        self.__tick_size = __TICK_SIZE__ # TODO
-        self.__record = self.__table.row
-        self.__symbol = symbol
-        self.__orders = {}
-        self.__bids_to_qty = PriceOrderedDict(False)
-        self.__asks_to_qty = PriceOrderedDict()
-        self.__bids = zeros(shape=[__LEVELS__,2])
-        self.__asks = zeros(shape=[__LEVELS__,2])
-        self.__unchanged = 0
-
-
-    def summary(self):
-        """
-        Prints some summary information for a parse
-        """
-        print "Completed data for:", self.__symbol
-        print "\tOutstanding orders:", len(self.__orders)
-        print "\tOutstanding bids:", len(self.__bids_to_qty)
-        print "\tOutstanding asks:", len(self.__asks_to_qty)
-        print "\tUnchanged:", self.__unchanged
-        # Any left over data and this was not a success
-        if len(self.__orders) or len(self.__bids_to_qty) or len(self.__asks_to_qty):
-            return False
-        else:
-            return True
-
-
-    def make_record(self, ts, ts_s):
-        """
-        A new record has been processed and the bids and asks updated
-        accordingly. This takes the new price data and updates the book and
-        timestamps for storing.
-        """
-        previous_bids = self.__bids.copy()
-        previous_asks = self.__asks.copy()
-
-        bid_top = self.__bids_to_qty.top()
-        if bid_top:
-            for i, px in enumerate(range(bid_top, 
-                                         bid_top-__LEVELS__*self.__tick_size, 
-                                         -self.__tick_size)):
-                self.__bids[i][0] = px
-                self.__bids[i][1] = self.__bids_to_qty.get_quantity(px)
-        else:
-            self.__bids = zeros(shape=[__LEVELS__,2])
-
-        ask_top = self.__asks_to_qty.top()
-        if ask_top:
-            for i, px in enumerate(range(ask_top, 
-                                         ask_top+__LEVELS__*self.__tick_size, 
-                                         self.__tick_size)):
-                self.__asks[i][0] = px
-                self.__asks[i][1] = self.__asks_to_qty.get_quantity(px)
-        else:
-            self.__asks = zeros(shape=[__LEVELS__,2])
-
-        self.__record['bid'] = self.__bids
-        self.__record['ask'] = self.__asks
-        self.__record['timestamp'] = ts
-        self.__record['timestamp_s'] = ts_s
-
-        if bid_top and ask_top and bid_top >= ask_top:
-            msg = [((bid_top==ask_top) and "Locked " or "Crossed "),
-                   "Market %s"%self.__symbol, 
-                   str((bid_top, ask_top))]
-            raise RuntimeError(string.join(msg,':'))        
-
-        if (self.__bids == previous_bids).all() and (self.__asks == previous_asks).all():
-            self.__unchanged += 1
-        else:
-            self.__record.append()
-        
-
-    def process_record(self, amd_record):
-        """
-        Incorporate the contents of the new record into the bids/asks
-        """
-
-        if isinstance(amd_record, AddRecord):
-            entry = (amd_record.price, amd_record.quantity)
-            current = self.__orders.setdefault(amd_record.order_id, entry)
-            if current != entry:
-                raise RuntimeError("Duplicate add for order: " + amd_record.order_id)
-
-            if amd_record.is_buy:
-                self.__bids_to_qty.update_quantity(entry[0], entry[1])
-            else:
-                self.__asks_to_qty.update_quantity(entry[0], entry[1])
-
-        elif isinstance(amd_record, DeleteRecord):
-            assert(amd_record.symbol == self.__symbol)
-            current = self.__orders.get(amd_record.order_id, None)
-            if not current:
-                raise RuntimeError("Record not found for delete: " + amd_record.order_id)
-
-            if amd_record.is_buy:
-                self.__bids_to_qty.update_quantity(current[0], -current[1])
-            else:
-                self.__asks_to_qty.update_quantity(current[0], -current[1])
-
-            del self.__orders[amd_record.order_id]
-
-        elif isinstance(amd_record, ModifyRecord):
-            assert(amd_record.symbol == self.__symbol)
-            current = self.__orders.get(amd_record.order_id, None)
-            if not current:
-                raise RuntimeError("Record not found for modify: " + amd_record.order_id)
-
-            if amd_record.is_buy:
-                self.__bids_to_qty.update_quantity(current[0], -current[1])
-                self.__bids_to_qty.update_quantity(amd_record.price, amd_record.quantity)
-            else:
-                self.__asks_to_qty.update_quantity(current[0], -current[1])
-                self.__asks_to_qty.update_quantity(amd_record.price, amd_record.quantity)
-
-            self.__orders[amd_record.order_id] = (amd_record.price, amd_record.quantity)
-        else:
-            raise RuntimeError("Invalid record: " + amd_record)
-
-        # bids and asks have been updated, now update the record and append to the table
-        self.make_record(amd_record.timestamp, 
-                         chicago_time_str(amd_record.timestamp))
-        self.__file_record_counter.increment_count()
 
 class ArcaRecord(IsDescription):
     asc_ts      = StringCol(12)
@@ -369,6 +160,62 @@ class ArcaRecord(IsDescription):
     quantity    = Int32Col()
     record_type = StringCol(1) # 'A', 'M', 'D'
     buy_sell    = StringCol(1) # 'B', 'S'
+
+class ArcaBookBuilder(BookBuilder):
+    def __init__(self, symbol, h5_file, **rest):
+        BookBuilder.__init__(self, symbol, h5_file, **rest)
+
+    def process_record(self, amd_record):
+        """
+        Incorporate the contents of the new record into the bids/asks
+        """
+
+        if isinstance(amd_record, AddRecord):
+            entry = (amd_record.price, amd_record.quantity)
+            current = self._orders.setdefault(amd_record.order_id, entry)
+            if current != entry:
+                raise RuntimeError("Duplicate add for order: " + amd_record.order_id)
+
+            if amd_record.is_buy:
+                self._bids_to_qty.update_quantity(entry[0], entry[1])
+            else:
+                self._asks_to_qty.update_quantity(entry[0], entry[1])
+
+        elif isinstance(amd_record, DeleteRecord):
+            assert(amd_record.symbol == self._symbol)
+            current = self._orders.get(amd_record.order_id, None)
+            if not current:
+                raise RuntimeError("Record not found for delete: " + amd_record.order_id)
+
+            if amd_record.is_buy:
+                self._bids_to_qty.update_quantity(current[0], -current[1])
+            else:
+                self._asks_to_qty.update_quantity(current[0], -current[1])
+
+            del self._orders[amd_record.order_id]
+
+        elif isinstance(amd_record, ModifyRecord):
+            assert(amd_record.symbol == self._symbol)
+            current = self._orders.get(amd_record.order_id, None)
+            if not current:
+                raise RuntimeError("Record not found for modify: " + amd_record.order_id)
+
+            if amd_record.is_buy:
+                self._bids_to_qty.update_quantity(current[0], -current[1])
+                self._bids_to_qty.update_quantity(amd_record.price, amd_record.quantity)
+            else:
+                self._asks_to_qty.update_quantity(current[0], -current[1])
+                self._asks_to_qty.update_quantity(amd_record.price, amd_record.quantity)
+
+            self._orders[amd_record.order_id] = (amd_record.price, amd_record.quantity)
+        else:
+            raise RuntimeError("Invalid record: " + amd_record)
+
+        # bids and asks have been updated, now update the record and append to the table
+        self.make_record(amd_record.timestamp, 
+                         chicago_time_str(amd_record.timestamp))
+        self._file_record_counter.increment_count()
+
     
 class ArcaFixParser(object):
     r"""
@@ -509,7 +356,7 @@ Parse arca files and create book
         """
         builder = self.__book_builders.get(record.symbol, None)
         if not builder:
-            builder = BookBuilder(record.symbol, self.__h5_file)
+            builder = ArcaBookBuilder(record.symbol, self.__h5_file)
             self.__book_builders[record.symbol] = builder
 
         try:
@@ -590,9 +437,9 @@ files for symbols present in the raw data.
         symbol_text = string.join(options.symbols, '_')
 
     for compressed_src in src_compressed_files:
-        print "Examining", compressed_src.basename()
         date = get_date_of_file(compressed_src)
+        print "Examining", compressed_src.basename(), date
         if date:
             parser = ArcaFixParser(compressed_src, date, symbol_text, symbol_re)
-            #parser.parse(True, 50000)
-            parser.parse(True)
+            parser.parse(True, 50000)
+            #parser.parse(True)
