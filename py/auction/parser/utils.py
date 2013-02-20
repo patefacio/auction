@@ -83,6 +83,9 @@ class BookBuilder(object):
 
     _book_files_ = {}
 
+    symbol = property(lambda self: self._symbol, None, None, 
+                      r"Symbol for the book")
+
     def __init__(self, symbol, h5_file, **rest):
         self._file_record_counter = BookBuilder._book_files_.get(h5_file, None)
         if not self._file_record_counter:
@@ -165,6 +168,7 @@ class BookBuilder(object):
             self._unchanged += 1
         else:
             self._record.append()
+            self._file_record_counter.increment_count()
         
 
     def process_record(self, amd_record):
