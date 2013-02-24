@@ -2,6 +2,7 @@ from tables import *
 from numpy import *
 from attribute import readable, writable
 from auction.book import Book, BookTable
+import string
 
 __FLUSH_FREQ__ = 10000
 __LEVELS__ = 10
@@ -24,14 +25,19 @@ class PriceOrderedDict(object):
     def get_quantity(self, px):
         return self.d.get(px, 0)
 
+    def is_bid(self):
+        return not self.ascending
+
     def update_quantity(self, px, q):
-        assert(q!=0)
         assert(len(self.L) == len(self.d))
+        #print self.is_bid() and "B UPD" or "A UPD", px,"with", q
         qty = self.d.get(px)
         if qty:
+            #print self.is_bid() and "B Updating" or "A Updating", px, "from", qty, "with", q
             qty += q
             if qty:
                 self.d[px] = qty
+                assert(qty>0)
             else:
                 del self.d[px]
                 self.L.remove(px)
@@ -50,6 +56,15 @@ class PriceOrderedDict(object):
             return self.L[0]
         else:
             return self.L[-1]
+
+    def top_n(self, n):
+        if not self.sorted:
+            self.L.sort()
+            self.sorted = True
+        if self.ascending:
+            return self.L[0:n]
+        else:
+            return [ x for x in reversed(self.L[-n:]) ]
 
 class FileRecordCounter(object):
     """
@@ -100,25 +115,26 @@ class BookBuilder(object):
         self._tick_size = rest.get('tick_size', None) or __TICK_SIZE__ # TODO
         self._record = self._table.row
         self._symbol = symbol
-        self._orders = {}
         self._bids_to_qty = PriceOrderedDict(False)
         self._asks_to_qty = PriceOrderedDict()
         self._bids = zeros(shape=[__LEVELS__,2])
         self._asks = zeros(shape=[__LEVELS__,2])
         self._unchanged = 0
 
+    def hanging_orders(self):
+        return False
 
     def summary(self):
         """
         Prints some summary information for a parse
         """
         print "Completed data for:", self._symbol
-        print "\tOutstanding orders:", len(self._orders)
+        print "\tOutstanding orders:", self.hanging_orders()
         print "\tOutstanding bids:", len(self._bids_to_qty)
         print "\tOutstanding asks:", len(self._asks_to_qty)
         print "\tUnchanged:", self._unchanged
         # Any left over data and this was not a success
-        if len(self._orders) or len(self._bids_to_qty) or len(self._asks_to_qty):
+        if self.hanging_orders() or len(self._bids_to_qty) or len(self._asks_to_qty):
             return False
         else:
             return True
@@ -133,35 +149,35 @@ class BookBuilder(object):
         previous_bids = self._bids.copy()
         previous_asks = self._asks.copy()
 
-        bid_top = self._bids_to_qty.top()
-        if bid_top:
-            for i, px in enumerate(range(bid_top, 
-                                         bid_top-__LEVELS__*self._tick_size, 
-                                         -self._tick_size)):
-                self._bids[i][0] = px
-                self._bids[i][1] = self._bids_to_qty.get_quantity(px)
-        else:
-            self._bids = zeros(shape=[__LEVELS__,2])
+        #print self.symbol, "Bid top_n:", self._bids_to_qty.top_n(__LEVELS__)
+        i = 0
+        for i, px in enumerate(self._bids_to_qty.top_n(__LEVELS__)):
+            self._bids[i][0] = px
+            self._bids[i][1] = self._bids_to_qty.get_quantity(px)
+        for j in range(i, __LEVELS__):
+            self._bids[j][0] = 0
+            self._bids[j][1] = 0
 
-        ask_top = self._asks_to_qty.top()
-        if ask_top:
-            for i, px in enumerate(range(ask_top, 
-                                         ask_top+__LEVELS__*self._tick_size, 
-                                         self._tick_size)):
-                self._asks[i][0] = px
-                self._asks[i][1] = self._asks_to_qty.get_quantity(px)
-        else:
-            self._asks = zeros(shape=[__LEVELS__,2])
+        #print self.symbol, "Ask top_n:", self._asks_to_qty.top_n(__LEVELS__)
+        for i, px in enumerate(self._asks_to_qty.top_n(__LEVELS__)):
+            self._asks[i][0] = px
+            self._asks[i][1] = self._asks_to_qty.get_quantity(px)
+        for j in range(i, __LEVELS__):
+            self._asks[j][0] = 0
+            self._asks[j][1] = 0
 
         self._record['bid'] = self._bids
         self._record['ask'] = self._asks
         self._record['timestamp'] = ts
         self._record['timestamp_s'] = ts_s
 
-        if bid_top and ask_top and bid_top >= ask_top:
-            msg = [((bid_top==ask_top) and "Locked " or "Crossed "),
+        top_bid = self._bids[0][0]
+        top_ask = self._asks[0][0]
+        if top_bid and top_ask and (top_bid >= top_ask):
+            msg = [((self._bids[0][0]==self._asks[0][0]) and "Locked " or "Crossed "),
                    "Market %s"%self._symbol, 
-                   str((bid_top, ask_top))]
+                   str((self._bids[0], self._asks[0]))]
+            print string.join(msg, ':')
             raise RuntimeError(string.join(msg,':'))        
 
         if (self._bids == previous_bids).all() and (self._asks == previous_asks).all():
