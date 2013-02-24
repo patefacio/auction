@@ -28,7 +28,8 @@ from numpy import zeros, array
 
 __PriceRe__ = re.compile(r"\s*(\d*)(?:\.(\d+))?\s*")
 __DateRe__ = re.compile(r"(\d\d\d\d)(\d\d)(\d\d)")
-__ARCA_SRC_PATH__ = COMPRESSED_DATA_PATH / 'arca'
+__ARCA_SRC_PATH__ = DATA_PATH / 'NYSE_ARCA2'
+__ARCA_OUT_PATH__ = BOOK_DATA / 'arca'
 __FLUSH_FREQ__ = 10000
 __LEVELS__ = 10
 __PX_MULTIPLIER__ = 1000000
@@ -53,7 +54,12 @@ def make_timestamp(start_of_date, seconds, millis):
     additional seconds and millis.
     """
     seconds = int(seconds)
-    millis = int(millis)
+    try:
+        millis = 0 if millis=='' else int(millis)
+    except Exception,e:
+        print "Invalid millis:", millis
+        raise e
+        
     return start_of_date + seconds*1000000 + millis*1000
 
 def int_price(px_str):
@@ -234,7 +240,7 @@ Parse arca files and create book
         self.__input_path = input_path
         self.__date = input_date
         self.__file_tag = file_tag
-        self.__output_base = __ARCA_SRC_PATH__ / 'h5' / (str(self.__date)+'_'+file_tag)
+        self.__output_base = __ARCA_OUT_PATH__ / (str(self.__date)+'_'+file_tag)
         self.__symbol_match_re = symbol_match_re
         self.__start_of_date = start_of_date(self.__date.year, self.__date.month,
                                              self.__date.day, NY_TZ)
@@ -257,6 +263,8 @@ Parse arca files and create book
         """
         self.__output_path = self.__output_base + (build_book and ".h5" or "_AMD_.h5")
         logging.info("Parsing file %s\n\tto create %s"% (self.__input_path, self.__output_path))
+        if not self.__output_path.parent.exists():
+            os.makedirs(self.__output_path.parent)
         self.__h5_file = openFile(self.__output_path, mode = "w", title = "ARCA Equity Data")
         if not build_book:
             ## If not building book, then just writing out AMD data as hdf5
@@ -286,7 +294,7 @@ Parse arca files and create book
                               (self.__symbol_match_re and 
                                self.__symbol_match_re.pattern or "*")))
 
-            fields = line.split(',')
+            fields = re.split(r'\s*,\s*', line)
             code = fields[0]
             record = None
             if code == 'A':
@@ -440,5 +448,5 @@ files for symbols present in the raw data.
         print "Examining", compressed_src.basename(), date
         if date:
             parser = ArcaFixParser(compressed_src, date, symbol_text, symbol_re)
-            parser.parse(True, 50000)
-            #parser.parse(True)
+            #parser.parse(True, 50000)
+            parser.parse(True)
