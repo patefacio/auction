@@ -24,6 +24,7 @@ import datetime
 import time
 import string
 import pprint
+import traceback
 from numpy import zeros, array
 
 __PriceRe__ = re.compile(r"\s*(\d*)(?:\.(\d+))?\s*")
@@ -170,17 +171,36 @@ class ArcaRecord(IsDescription):
 class ArcaBookBuilder(BookBuilder):
     def __init__(self, symbol, h5_file, **rest):
         BookBuilder.__init__(self, symbol, h5_file, **rest)
+        self._bid_orders = {}
+        self._ask_orders = {}
+
+    def hanging_orders(self):
+        return len(self._bid_orders) + len(self._ask_orders)
 
     def process_record(self, amd_record):
         """
         Incorporate the contents of the new record into the bids/asks
         """
 
+        is_buy = amd_record.is_buy
+        orders = self._bid_orders if is_buy else self._ask_orders
+        side = "B" if is_buy else "A"
+
         if isinstance(amd_record, AddRecord):
             entry = (amd_record.price, amd_record.quantity)
-            current = self._orders.setdefault(amd_record.order_id, entry)
-            if current != entry:
-                raise RuntimeError("Duplicate add for order: " + amd_record.order_id)
+            #current = orders.setdefault(amd_record.order_id, entry)
+            current = orders.get(amd_record.order_id)
+            if not current:
+                orders[amd_record.order_id] = entry
+            else:
+                #print "Dealing with multi add", self._symbol, side, amd_record.order_id
+                # Don't raise an error - turn the entry into a list if it is not
+                if type(current) != list:
+                    orders[amd_record.order_id] = [current]
+
+                # Put this new add at front of list so pop effects FIFO
+                #orders[amd_record.order_id].insert(0, entry)
+                orders[amd_record.order_id].append(entry)
 
             if amd_record.is_buy:
                 self._bids_to_qty.update_quantity(entry[0], entry[1])
@@ -189,21 +209,40 @@ class ArcaBookBuilder(BookBuilder):
 
         elif isinstance(amd_record, DeleteRecord):
             assert(amd_record.symbol == self._symbol)
-            current = self._orders.get(amd_record.order_id, None)
+            current = orders.get(amd_record.order_id, None)
             if not current:
                 raise RuntimeError("Record not found for delete: " + amd_record.order_id)
+
+            is_list = (type(current) == list)
+            if is_list:
+                # If it is a list, pop off the first entry (FIFO) and "delete" that qty
+                #print "Deleting", amd_record.order_id, "one elm of list", side, orders,
+                original_list = current
+                current = orders[amd_record.order_id].pop()
+                #print "with current volume at", current[0], (self._bids_to_qty.get_quantity(current[0]) if amd_record.is_buy else \
+                #                                                 self._asks_to_qty.get_quantity(current[0]))
 
             if amd_record.is_buy:
                 self._bids_to_qty.update_quantity(current[0], -current[1])
             else:
                 self._asks_to_qty.update_quantity(current[0], -current[1])
 
-            del self._orders[amd_record.order_id]
+            if is_list:
+                if len(original_list) == 0:
+                    #print "Deleting multi-order list", amd_record.order_id
+                    del orders[amd_record.order_id]
+            else:
+                del orders[amd_record.order_id]
 
         elif isinstance(amd_record, ModifyRecord):
             assert(amd_record.symbol == self._symbol)
-            current = self._orders.get(amd_record.order_id, None)
+            current = orders.get(amd_record.order_id)
+
             if not current:
+                raise RuntimeError("Record not found for modify: " + amd_record.order_id)
+
+            if type(current) == list:
+                print "UNABLE TO SUPPORT MODIFY with duplicate adds!", amd_record.order_id, "mod", amd_record, "current", current
                 raise RuntimeError("Record not found for modify: " + amd_record.order_id)
 
             if amd_record.is_buy:
@@ -213,7 +252,7 @@ class ArcaBookBuilder(BookBuilder):
                 self._asks_to_qty.update_quantity(current[0], -current[1])
                 self._asks_to_qty.update_quantity(amd_record.price, amd_record.quantity)
 
-            self._orders[amd_record.order_id] = (amd_record.price, amd_record.quantity)
+            orders[amd_record.order_id] = (amd_record.price, amd_record.quantity)
         else:
             raise RuntimeError("Invalid record: " + amd_record)
 
@@ -369,6 +408,7 @@ Parse arca files and create book
         try:
             builder.process_record(record)
         except Exception,e:
+            #print traceback.format_exc()
             self.__parse_manager.warning(record.symbol +': ' + e.message, self.__line_number+1)
             
 
