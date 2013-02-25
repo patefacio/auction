@@ -289,7 +289,7 @@ Parse arca files and create book
         if not self.__input_path.exists():
             raise RuntimeError("Input path does not exist " + self.__input_path)
 
-    def parse(self, build_book = True, stop_early_at_hit=0):
+    def parse(self, build_book = True, force = False, stop_early_at_hit=0):
         """
         Parse the input file. There are two modes: build_book=True and
         build_book=False. If build_book=False, the h5 file is simply the same
@@ -302,6 +302,8 @@ Parse arca files and create book
         """
         self.__output_path = self.__output_base + (build_book and ".h5" or "_AMD_.h5")
         logging.info("Parsing file %s\n\tto create %s"% (self.__input_path, self.__output_path))
+        if self.__output_path.exists() and not force:
+            return
         if not self.__output_path.parent.exists():
             os.makedirs(self.__output_path.parent)
         self.__h5_file = openFile(self.__output_path, mode = "w", title = "ARCA Equity Data")
@@ -489,4 +491,4 @@ files for symbols present in the raw data.
         if date:
             parser = ArcaFixParser(compressed_src, date, symbol_text, symbol_re)
             #parser.parse(True, 50000)
-            parser.parse(True)
+            parser.parse(True, False)
