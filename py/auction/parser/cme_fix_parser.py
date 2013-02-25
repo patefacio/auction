@@ -24,7 +24,8 @@ import string
 import pprint
 import traceback
 
-__CME_SRC_PATH__ = COMPRESSED_DATA_PATH / 'cme'
+__CME_SRC_PATH__ = DATA_PATH / 'CME_GLOBEX2'
+__CME_OUT_PATH__ = BOOK_DATA / 'cme'
 __LEVELS__ = 10
 
 ActionNew = '0'
@@ -299,7 +300,7 @@ class CmeFixParser(object):
     def advance_date(self, new_date):
         if self.__h5_file:
             self.__h5_file.close()
-        output_path = __CME_SRC_PATH__ / 'h5' / str(new_date)
+        output_path = __CME_OUT_PATH__ / str(new_date)
         if not output_path.parent.exists():
             os.makedirs(output_path.parent)
         print "OUT", output_path
@@ -382,7 +383,10 @@ class CmeFixParser(object):
 if __name__ == "__main__":
     import pprint
     here = path(os.path.realpath(__file__))
-    start = here.parent.parent.parent.parent  / 'data' / 'compressed'
+    start = __CME_SRC_PATH__
+    for src in start.files():
+        print src
+
     parser = CmeFixParser([ \
 #            start / 'FFIX_20120212.zip', \
 #            start / 'FFIX_20120213.zip', \
