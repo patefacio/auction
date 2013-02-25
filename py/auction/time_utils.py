@@ -78,13 +78,26 @@ def get_date_of_file(fileName):
     else:
         return None
 
+Monday = 0
+Tuesday = 1
+Wednesday = 2
+Thursday = 3
+Friday = 4
+Saturday = 5
+Sunday = 6
+
+def get_previous_weekday(some_date, desired_day = Sunday):
+    weekday = some_date.weekday()
+    days_back = (desired_day - weekday - 7) if (desired_day > weekday) else (weekday - desired_day)
+    return some_date + datetime.timedelta(days_back)
+
 if __name__ == "__main__":
 
 
-    def make_timestamp(start_of_date, seconds, millis):
+    def make_timestamp(sod, seconds, millis):
         seconds = int(seconds)
         millis = int(millis)
-        return start_of_date + seconds*1000000 + millis*1000
+        return sod + seconds*1000000 + millis*1000
 
     def grab_time():
         for i in range(10000):
@@ -110,11 +123,21 @@ if __name__ == "__main__":
     print "CH", chicago_time(start_of_date(2011, 7, 22, CHI_TZ))
     print "NY", chicago_time(start_of_date(2011, 7, 22, NY_TZ))
 
-    dt = dt.utcnow()
-    print (calendar.timegm(dt.utctimetuple())*__SUBSECOND_RESOLUTION__), "vs", dt.microsecond
-    print (calendar.timegm(dt.utctimetuple())*__SUBSECOND_RESOLUTION__ + dt.microsecond), "vs", dt.microsecond
+    dtnow = dt.utcnow()
+    print (calendar.timegm(dtnow.utctimetuple())*__SUBSECOND_RESOLUTION__), "vs", dtnow.microsecond
+    print (calendar.timegm(dtnow.utctimetuple())*__SUBSECOND_RESOLUTION__ + dtnow.microsecond), "vs", dtnow.microsecond
 
     print chicago_time(1311321600730000)
 
     print "Sample timestamp", datetime_from_cme_timestamp('20120213183040306'),
     print "in chicago", chicago_time(timestamp_from_datetime(datetime_from_cme_timestamp('20120213183040306')))
+
+    print "UTC sod", make_timestamp(start_of_date(2011, 7, 22, CHI_TZ), 28800, 741)
+    print "CH sod", chicago_time(make_timestamp(start_of_date(2011, 7, 22, CHI_TZ), 28800, 741))
+
+    print "UTC sod", make_timestamp(start_of_date(2011, 7, 22, NY_TZ), 14400, 730)
+    print "CH sod", chicago_time(make_timestamp(start_of_date(2011, 7, 22, NY_TZ), 14400, 730))
+
+    some_day = datetime.date(2001,1,1)
+    print some_day, some_day.weekday()
+    print get_previous_weekday(some_day, Saturday)
