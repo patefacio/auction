@@ -14,5 +14,4 @@ UNCOMPRESSED_DATA_PATH = DATA_PATH / 'uncompressed'
 # Location for h5 book data
 BOOK_DATA = DATA_PATH.parent / 'book_data'
 
-print DATA_PATH, DATA_PATH.exists()
-print BOOK_DATA, BOOK_DATA.exists()
+CME_OUT_PATH = BOOK_DATA / 'cme'

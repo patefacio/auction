@@ -25,8 +25,11 @@ class ParseWarnings(IsDescription):
     """
     Record for logging warnings
     """
-    src_line        = Int64Col()
-    msg             = StringCol(256)
+    msg_type           = StringCol(2) # 'L'ocked, 'C'rossed, 'O'ther
+    src_timestamp      = Int64Col()
+    src_timestamp_s    = StringCol(16)
+    src_line           = Int64Col()
+    msg                = StringCol(256)
 
 class ParseManager(object):
     """
@@ -34,6 +37,14 @@ class ParseManager(object):
     parse market data text files and build books. This utility class is a
     place to add some progress metadata to the generated book data file
     """
+
+    @staticmethod
+    def get_summary_record(h5_file_path):
+        h5_file = tables.openFile(h5_file_path)
+        summary = h5_file.root.parse_results.summary 
+        result = None if not len(summary) else summary[0]
+        h5_file.close()
+        return result
 
     @staticmethod
     def summarize_file(h5_file_path):
@@ -76,11 +87,14 @@ class ParseManager(object):
         self.__summary_row['src_file_mtime'] = timestamp_from_mtime(src_file.mtime)
 
 
-    def warning(self, msg, line=0):
+    def warning(self, msg, msg_type, src_timestamp=0, line=0):
         """
         Log a warning message with an optional src file line number
         """
         self.__warning_row['msg'] = msg
+        self.__warning_row['msg_type'] = msg_type
+        self.__warning_row['src_timestamp'] = src_timestamp
+        self.__warning_row['src_timestamp_s'] = chicago_time(src_timestamp)
         self.__warning_row['src_line'] = line
         self.__warning_row.append()
 

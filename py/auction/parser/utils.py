@@ -8,6 +8,13 @@ __FLUSH_FREQ__ = 10000
 __LEVELS__ = 10
 __TICK_SIZE__ = 10000
 
+class PriceException(Exception):
+    def __init__(self, symbol, tag, bid_ask):
+        self.symbol = symbol
+        self.tag = tag
+        self.bid_ask = bid_ask
+        self.message = symbol + (": Locked Market: " if tag=='L' else ": Crossed Market: ") + str(bid_ask)
+
 class PriceOrderedDict(object):
     """
     Dictionary with keys sorted by price - quite similar to effect of an
@@ -174,11 +181,10 @@ class BookBuilder(object):
         top_bid = self._bids[0][0]
         top_ask = self._asks[0][0]
         if top_bid and top_ask and (top_bid >= top_ask):
-            msg = [((self._bids[0][0]==self._asks[0][0]) and "Locked " or "Crossed "),
-                   "Market %s"%self._symbol, 
-                   str((self._bids[0], self._asks[0]))]
-            print string.join(msg, ':')
-            raise RuntimeError(string.join(msg,':'))        
+            tag = 'L' if (top_bid==top_ask) else 'C'
+            excp = PriceException(self._symbol, tag, (self._bids[0], self._asks[0])) 
+            print excp.message
+            raise excp
 
         if (self._bids == previous_bids).all() and (self._asks == previous_asks).all():
             self._unchanged += 1
@@ -186,6 +192,11 @@ class BookBuilder(object):
             self._record.append()
             self._file_record_counter.increment_count()
         
-
     def process_record(self, amd_record):
         raise RuntimeError("process_record Subclass Responsibility")
+
+    def bids(self):
+        return self._bids
+
+    def asks(self):
+        return self._asks

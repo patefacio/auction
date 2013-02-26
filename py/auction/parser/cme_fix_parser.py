@@ -25,7 +25,7 @@ import pprint
 import traceback
 
 __CME_SRC_PATH__ = DATA_PATH / 'CME_GLOBEX2'
-__CME_OUT_PATH__ = BOOK_DATA / 'cme'
+
 __LEVELS__ = 10
 
 ActionNew = '0'
@@ -137,6 +137,14 @@ class CmeBookBuilder(BookBuilder):
         else:
             self.__bid_book = [None]*__LEVELS__
             self.__ask_book = [None]*__LEVELS__
+
+    def top_bid(self):
+        tb = self.__bid_book[0]
+        return tb[0] if tb else tb
+
+    def top_ask(self):
+        ta = self.__ask_book[0]
+        return ta[0] if ta else ta
 
     def write_record(self, ts, ts_s):
         # copy from book to record
@@ -296,17 +304,35 @@ class CmeFixParser(object):
         self.__h5_file = None
         self.__ts = None
         self.__chi_ts = None
+        self.__data_start_timestamp = None
+        self.__current_timestamp = None
+        self.__output_path = None
+
+    def write_summary(self):
+            ############################################################
+            # Finish filling in the parse summary info and close up
+            ############################################################
+            self.__parse_manager.data_start(self.__data_start_timestamp)
+            self.__parse_manager.data_stop(self.__current_timestamp)
+            self.__parse_manager.irrelevants(0)
+            self.__parse_manager.processed(self.__line_number+1)
+            self.__parse_manager.mark_stop(True)
+            ParseManager.summarize_file(self.__output_path)
+            self.__h5_file.close()
 
     def advance_date(self, new_date):
         if self.__h5_file:
-            self.__h5_file.close()
-        output_path = __CME_OUT_PATH__ / str(new_date)
-        if not output_path.parent.exists():
-            os.makedirs(output_path.parent)
-        print "OUT", output_path
-        self.__h5_file = openFile(output_path, mode="w", title="CME Fix Data")
+            self.write_summary()
+
+        self.__output_path = CME_OUT_PATH / get_date_string(new_date)
+        if not self.__output_path.parent.exists():
+            os.makedirs(self.__output_path.parent)
+        print "OUT", self.__output_path
+        self.__h5_file = openFile(self.__output_path, mode="w", title="CME Fix Data")
         self.__parse_manager = ParseManager(self.__current_input_path, self.__h5_file)
+        self.__parse_manager.mark_start()
         self.__prior_day_books = {}
+        self.__data_start_timestamp = 0
         for symbol, builder in self.__book_builders.items():
             self.__prior_day_books[symbol] = (builder.bid_book, builder.ask_book)
         self.__book_builders = {}
@@ -314,6 +340,9 @@ class CmeFixParser(object):
     def build_books(self, msg):
         try:
             ts = timestamp_from_cme_timestamp(msg.sending_time)
+            self.__current_timestamp = ts
+            if 0 == self.__data_start_timestamp:
+                self.__data_start_timestamp = ts
             chi_ts = chicago_time_str(ts)
             affected_builders = sets.Set()
             for update in msg.entries:
@@ -333,7 +362,19 @@ class CmeFixParser(object):
             for builder in affected_builders:
                 #print chi_ts, builder.symbol, "Bids", builder.bid_book
                 #print chi_ts, builder.symbol, "Asks", builder.ask_book
-                builder.write_record(ts, chi_ts)
+                top_bid = builder.top_bid()
+                top_ask = builder.top_ask()
+                if top_bid and top_ask:
+                    if top_bid == top_ask:
+                        msg = builder.symbol + ': Locked (%s, %s)'%(top_bid, top_ask)
+                        print msg
+                        self.__parse_manager.warning(msg, 'L', self.__current_timestamp, self.__line_number+1)
+                    elif top_bid > top_ask:
+                        msg = builder.symbol + ': Crossed (%s, %s)'%(top_bid, top_ask)
+                        print msg
+                        self.__parse_manager.warning(msg, 'C', self.__current_timestamp, self.__line_number+1)
+                    else:
+                        builder.write_record(ts, chi_ts)
 
             if self.__ts:
                 if ts < self.__ts:
@@ -347,6 +388,7 @@ class CmeFixParser(object):
         except Exception,e:
             print traceback.format_exc()
             self.__parse_manager.warning(self.__current_file + ':' + e.message, 
+                                         'G', self.__current_timestamp,
                                          self.__line_number+1)
 
     def parse(self):
@@ -380,22 +422,47 @@ class CmeFixParser(object):
 
             print "Completed", i , "records"
 
+        self.write_summary()
+
 if __name__ == "__main__":
     import pprint
+    import argparse
+    from auction.parser.cme_date_utils import CmeRawFileSet
+
+    parser = argparse.ArgumentParser("""
+Take input raw data and generate corresponding hdf5 data files as well as book
+files for the raw data.
+""")
+
+    parser.add_argument('-d', '--date', 
+                        dest='dates',
+                        action='store',
+                        nargs='+',
+                        help='Date(s) to process, if empty all dates assumed')
+
+    parser.add_argument('-v', '--verbose', 
+                        dest='verbose',
+                        action='store_true',
+                        help='Output extra logging information')
+
+    options = parser.parse_args()
+
+    if options.verbose:
+        logging.basicConfig(level=logging.INFO)
+
+    print "Processing dates:", options.dates
     here = path(os.path.realpath(__file__))
+
     start = __CME_SRC_PATH__
-    for src in start.files():
-        print src
 
-    parser = CmeFixParser([ \
-#            start / 'FFIX_20120212.zip', \
-#            start / 'FFIX_20120213.zip', \
-#            start / 'FFIX_20120214.zip' \
-            start / 'FFIX_20111016.zip', \
-            start / 'FFIX_20111017.zip', \
-            start / 'FFIX_20111018.zip' \
+    fileset = CmeRawFileSet()
 
-                            ])
+    files = fileset.get_files(options.dates)
+    assert len(files) == len(options.dates)
+    print "Files are", pprint.pformat(files)
+
+
+    parser = CmeFixParser(files)
     parser.parse()
     pprint.pprint(vars(parser))
 

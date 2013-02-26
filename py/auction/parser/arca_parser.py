@@ -409,10 +409,11 @@ Parse arca files and create book
 
         try:
             builder.process_record(record)
-        except Exception,e:
+        except PriceException as e:
             #print traceback.format_exc()
-            self.__parse_manager.warning(record.symbol +': ' + e.message, self.__line_number+1)
-            
+            self.__parse_manager.warning(record.symbol +': ' + e.message, e.tag, record.timestamp, self.__line_number+1)
+        except Exception as e:
+            self.__parse_manager.warning(record.symbol +': ' + e.message, 'G', record.timestamp, self.__line_number+1)
 
 if __name__ == "__main__":
     import argparse

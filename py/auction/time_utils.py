@@ -64,7 +64,7 @@ def chicago_time(ts):
     return stamp.astimezone(CHI_TZ)
 
 def chicago_time_str(ts):
-    return chicago_time(ts).strftime('%H:%M:%S:%f')
+    return chicago_time(ts).strftime('%H:%M:%S:%f') if ts else 'Not Set'
 
 def get_date_of_file(fileName):
     """
@@ -77,6 +77,9 @@ def get_date_of_file(fileName):
         return datetime.date(int(year), int(month), int(day))
     else:
         return None
+
+def get_date_string(d):
+    return datetime.date.isoformat(d).replace('-','')
 
 Monday = 0
 Tuesday = 1
@@ -141,3 +144,5 @@ if __name__ == "__main__":
     some_day = datetime.date(2001,1,1)
     print some_day, some_day.weekday()
     print get_previous_weekday(some_day, Saturday)
+
+    print get_date_string(some_day)
