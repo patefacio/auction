@@ -2,6 +2,7 @@ from tables import *
 from numpy import *
 from attribute import readable, writable
 from auction.book import Book, BookTable
+from auction.trade import TradeTable
 import string
 
 __FLUSH_FREQ__ = 10000
@@ -117,10 +118,18 @@ class BookBuilder(object):
         h5_file = self._file_record_counter.h5_file
         filters = Filters(complevel=1, complib='zlib')
         group = h5_file.createGroup("/", symbol, 'Book data')
-        self._table = h5_file.createTable(group, 'books', BookTable, 
-                                           "Data for "+str(symbol), filters=filters)
+        self._book_table = h5_file.createTable(group, 'books', BookTable, 
+                                               "Data for "+str(symbol), filters=filters)
+        self._record = self._book_table.row
+        if rest.get('include_trades'):
+            print "INCLUDING TRADES", rest
+            self._trade_table = h5_file.createTable(group, 'trades', TradeTable, 
+                                                    "Trades for "+str(symbol), filters=filters)
+            self._trade = self._trade_table.row
+        else:
+            print "NOT INCLUDING TRADES", rest
+            self._trade = None
         self._tick_size = rest.get('tick_size', None) or __TICK_SIZE__ # TODO
-        self._record = self._table.row
         self._symbol = symbol
         self._bids_to_qty = PriceOrderedDict(False)
         self._asks_to_qty = PriceOrderedDict()

@@ -113,6 +113,7 @@ TickDirection = inv_tags['TickDirection']
 TradeVolume = inv_tags['TradeVolume']
 AggressorSide = inv_tags['AggressorSide']
 QuoteCondition = inv_tags['QuoteCondition']
+TradeCondition = inv_tags['TradeCondition']
 
 # print "All\n\t", string.join(sorted(tags.values()), "\n\t"), \
 #     "\nrepeated\n\t", string.join(sorted_repeated, "\n\t"), \
@@ -171,7 +172,7 @@ class CmeBookBuilder(BookBuilder):
         self._record.append()
         self._file_record_counter.increment_count()
 
-    def process_record(self, update, ts):
+    def process_record(self, update, ts, chi_ts):
         """
         Incorporate the contents of the new record into the bids/asks
         """
@@ -189,9 +190,19 @@ class CmeBookBuilder(BookBuilder):
             return
 
         if update[MDEntryType] == TradeEntryType:
-            #print "Trade", action, px, qty, \
-            #    "aggressor", (update[AggressorSide]=='1' and 'B' or 'S')
-            pass
+            if self._trade:
+                self._trade['timestamp'] = ts
+                self._trade['timestamp_s'] = chi_ts
+                self._trade['price'] = px
+                self._trade['quantity'] = qty
+                side = update.get(AggressorSide)
+                if side:
+                    self._trade['trade_type'] = '1' if side=='1' else '2'
+                else:
+                    self._trade['trade_type'] = '3'
+                self._trade.append()
+                #print "Trade", action, px, qty,"aggressor", update.get(AggressorSide), \
+                #    "tradecondition", update.get(TradeCondition)
         else:
 
             assert (level >= 0), "WARNING: bad level: %s"%readable_update(update)
@@ -305,7 +316,6 @@ class CmeFixParser(object):
         self.__ts = None
         self.__chi_ts = None
         self.__data_start_timestamp = None
-        self.__current_timestamp = None
         self.__output_path = None
 
     def write_summary(self):
@@ -313,12 +323,12 @@ class CmeFixParser(object):
             # Finish filling in the parse summary info and close up
             ############################################################
             self.__parse_manager.data_start(self.__data_start_timestamp)
-            self.__parse_manager.data_stop(self.__current_timestamp)
+            self.__parse_manager.data_stop(self.__ts)
             self.__parse_manager.irrelevants(0)
             self.__parse_manager.processed(self.__line_number+1)
             self.__parse_manager.mark_stop(True)
-            ParseManager.summarize_file(self.__output_path)
             self.__h5_file.close()
+            ParseManager.summarize_file(self.__output_path)
 
     def advance_date(self, new_date):
         if self.__h5_file:
@@ -340,55 +350,52 @@ class CmeFixParser(object):
     def build_books(self, msg):
         try:
             ts = timestamp_from_cme_timestamp(msg.sending_time)
-            self.__current_timestamp = ts
-            if 0 == self.__data_start_timestamp:
-                self.__data_start_timestamp = ts
-            chi_ts = chicago_time_str(ts)
-            affected_builders = sets.Set()
-            for update in msg.entries:
-                symbol = update[SecurityDesc]
-                builder = self.__book_builders.get(symbol, None)
-                if not builder:
-                    builder = CmeBookBuilder(symbol, self.__h5_file, 
-                                             self.__prior_day_books.get(symbol, None))
-                    self.__book_builders[symbol] = builder
-
-                if not update[MDEntryType] in __BOOK_ENTRY_TYPES__:
-                    continue
-        
-                builder.process_record(update, chi_ts)
-                affected_builders.add(builder)
-
-            for builder in affected_builders:
-                #print chi_ts, builder.symbol, "Bids", builder.bid_book
-                #print chi_ts, builder.symbol, "Asks", builder.ask_book
-                top_bid = builder.top_bid()
-                top_ask = builder.top_ask()
-                if top_bid and top_ask:
-                    if top_bid == top_ask:
-                        msg = builder.symbol + ': Locked (%s, %s)'%(top_bid, top_ask)
-                        print msg
-                        self.__parse_manager.warning(msg, 'L', self.__current_timestamp, self.__line_number+1)
-                    elif top_bid > top_ask:
-                        msg = builder.symbol + ': Crossed (%s, %s)'%(top_bid, top_ask)
-                        print msg
-                        self.__parse_manager.warning(msg, 'C', self.__current_timestamp, self.__line_number+1)
-                    else:
-                        builder.write_record(ts, chi_ts)
-
             if self.__ts:
                 if ts < self.__ts:
                     print "At", self.__line_number+1, "of", self.__current_file, \
                         "previous ts:", self.__chi_ts, "new:", chi_ts, \
                         "Current Message:", pprint.pformat(msg)
                     assert False, "Timestamps going backward"
+
             self.__ts = ts
-            self.__chi_ts = chi_ts
+            self.__chi_ts = chicago_time_str(self.__ts)
+            if 0 == self.__data_start_timestamp:
+                self.__data_start_timestamp = self.__ts
+            affected_builders = sets.Set()
+            for update in msg.entries:
+                symbol = update[SecurityDesc]
+                builder = self.__book_builders.get(symbol, None)
+                if not builder:
+                    builder = CmeBookBuilder(symbol, self.__h5_file, 
+                                             self.__prior_day_books.get(symbol, None),
+                                             include_trades = True)
+                    self.__book_builders[symbol] = builder
+
+                if not update[MDEntryType] in __BOOK_ENTRY_TYPES__:
+                    continue
+        
+                builder.process_record(update, self.__ts, self.__chi_ts)
+                affected_builders.add(builder)
+
+            for builder in affected_builders:
+                top_bid = builder.top_bid()
+                top_ask = builder.top_ask()
+                if top_bid and top_ask:
+                    if top_bid == top_ask:
+                        msg = builder.symbol + ': Locked (%s, %s)'%(top_bid, top_ask)
+                        print msg
+                        self.__parse_manager.warning(msg, 'L', self.__ts, self.__line_number+1)
+                    elif top_bid > top_ask:
+                        msg = builder.symbol + ': Crossed (%s, %s)'%(top_bid, top_ask)
+                        print msg
+                        self.__parse_manager.warning(msg, 'C', self.__ts, self.__line_number+1)
+
+                    builder.write_record(self.__ts, self.__chi_ts)
 
         except Exception,e:
             print traceback.format_exc()
             self.__parse_manager.warning(self.__current_file + ':' + e.message, 
-                                         'G', self.__current_timestamp,
+                                         'G', self.__ts,
                                          self.__line_number+1)
 
     def parse(self):
