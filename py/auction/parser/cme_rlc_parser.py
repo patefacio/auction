@@ -34,60 +34,75 @@ __LEVELS__ = 10
 
 
 class RlcRecord(object):
-    readable(levels=None, symbol=None, timestamp=None)
+    readable(levels=None, symbol=None, timestamp=None, trade_details=None)
 
-    def is_book_update(self):
+    @staticmethod
+    def make_timestamp(date_time, seconds_centis):
+        m = __CmeDateTimeRe__.match(date_time)
+        assert m, "Invalid timestamp:" + date_time
+        year, mon, day, hr, minutes, sec = [ int(i) for i in m.groups() ]
+        result = datetime.datetime(int(year), int(mon), int(day),
+                                   int(hr),int(minutes),int(sec), 0,
+                                   tzinfo=CHI_TZ).astimezone(UTC_TZ)
+        m = __SecondCentisecondRe__.match(seconds_centis)
+        if m:
+            seconds, centisec = [ int(i) for i in m.groups() ]
+            result = result + datetime.timedelta(0, (seconds-sec)%60, centisec*10000)
+        return timestamp_from_datetime(result)
+
+    def is_book_message(self):
         return self.__msg_type == 'MA'
+
+    def is_trade_message(self):
+        return self.__msg_type == 'M6'
 
     def __init__(self, line):
         self.__msg_type = line[33:35]
-        if self.__msg_type != 'MA':
-            return
-        self.__host_ts = line[12:17]
-        self.__trade_date = line[41:49]
-        self.__symbol = line[49:69].strip()
-        self.__date_time = line[17:31]
-        m = __CmeDateTimeRe__.match(self.__date_time)
-        assert m, "Invalid timestamp:" + self.__date_time
-        year, mon, day, hr, minutes, sec = [ int(i) for i in m.groups() ]
-        self.__timestamp = datetime.datetime(int(year), int(mon), int(day),
-                                             int(hr),int(minutes),int(sec), 0,
-                                             tzinfo=CHI_TZ).astimezone(UTC_TZ)
-                                                 
-        m = __SecondCentisecondRe__.match(self.__host_ts)
-        if m:
-            seconds, centisec = [ int(i) for i in m.groups() ]
-            self.__timestamp = self.__timestamp + datetime.timedelta(0, (seconds-sec)%60, centisec*10000)
+        if self.is_trade_message():
+            self.__host_ts = line[12:17]
+            self.__trade_date = line[41:49]
+            self.__symbol = line[49:69].strip()
+            self.__date_time = line[17:31]
+            self.__timestamp = RlcRecord.make_timestamp(self.__date_time, self.__host_ts)
+            # (px, qty, type)
+            self.__trade_details = (int(line[81:100]), int(line[69:81]), int(line[188:189]))
+
+        elif self.is_book_message():
+            self.__host_ts = line[12:17]
+            self.__trade_date = line[41:49]
+            self.__symbol = line[49:69].strip()
+            self.__date_time = line[17:31]
+            self.__timestamp = RlcRecord.make_timestamp(self.__date_time, self.__host_ts)
+            self.__trading_mode = line[70:71]
+            self.__change_mask = line[76:81]
+            self.__levels = []
+            start_index = 0
+            group_size = 72
+
+            def r(a,b):
+                return slice(start_index+a, start_index+b)
+
+            for i, is_set in enumerate(self.__change_mask):
+                if is_set=='1':
+                    self.__levels.append({ 'level':i, 
+                                           'symbol':self.__symbol,
+                                           'total_buy':int(line[r(82,94)]),
+                                           'num_buys': int(line[r(94,98)]),
+                                           'buy_px':int(line[r(98,117)]),
+
+                                           'sell_px':int(line[r(117,136)]),
+                                           'num_sells':int(line[r(136,140)]),
+                                           'total_sell':int(line[r(140,152)]), })
+                    #print "Added ", pprint.pformat(self.__levels[-1])
+                    start_index = start_index + group_size
+
+            if abs(len(line) - (start_index+81)) > 1:
+                #print len(line), (start_index+81)
+                #print line
+                #raise "Unexpected extra data on line: "+line
+                pass
         else:
-            # For some reason the first record or two may not have subsecond info
-            #print "Bogus host ts:", self.__host_ts
-            pass
-
-        self.__timestamp = timestamp_from_datetime(self.__timestamp)
-        self.__trading_mode = line[70:71]
-        self.__change_mask = line[76:81]
-        self.__levels = []
-        start_index = 0
-        group_size = 72
-
-        def r(a,b):
-            return slice(start_index+a, start_index+b)
-
-        for i, is_set in enumerate(self.__change_mask):
-            if is_set=='1':
-                self.__levels.append({ 'level':i, 
-                                       'symbol':self.__symbol,
-                                       'total_buy':int(line[r(82,94)]),
-                                       'num_buys': int(line[r(94,98)]),
-                                       'buy_px':int(line[r(98,117)]),
-
-                                       'sell_px':int(line[r(117,136)]),
-                                       'num_sells':int(line[r(136,140)]),
-                                       'total_sell':int(line[r(140,152)]), })
-                #print "Added ", pprint.pformat(self.__levels[-1])
-                start_index = start_index + group_size
-
-        assert len(line) == (start_index+81), "Unexpected extra data on line: "+line
+            return
 
 class CmeRlcBookBuilder(BookBuilder):
 
@@ -142,6 +157,17 @@ class CmeRlcBookBuilder(BookBuilder):
         self._record['timestamp_s'] = ts_s
         self._record.append()
         self._file_record_counter.increment_count()
+
+    def write_trade(self, record):
+        if self._trade:
+            self._trade['timestamp'] = record.timestamp
+            self._trade['timestamp_s'] = chicago_time_str(record.timestamp)
+            trade_details = record.trade_details
+            self._trade['price'] = trade_details[0]
+            self._trade['quantity'] = trade_details[1]
+            self._trade['trade_type'] = trade_details[2]
+            self._trade.append()
+        
 
 class CmeRlcParser(object):
     r"""
@@ -198,12 +224,18 @@ class CmeRlcParser(object):
     def build_books(self, record):
         try:
             symbol = record.symbol
-            builder = self.__book_builders.get(symbol, None)
+            builder = self.__book_builders.get(symbol)
             if not builder:
                 builder = CmeRlcBookBuilder(symbol, self.__h5_file, 
-                                            self.__prior_day_books.get(symbol, None))
+                                            self.__prior_day_books.get(symbol, None),
+                                            include_trades = True)
                 self.__book_builders[symbol] = builder
-            builder.process_record(record)
+
+
+            if record.is_book_message():
+                builder.process_record(record)
+            elif record.is_trade_message():
+                builder.write_trade(record)
 
         except Exception,e:
             print traceback.format_exc()
@@ -230,10 +262,9 @@ class CmeRlcParser(object):
                         self.__current_timestamp = record.timestamp
                         if 0 == self.__data_start_timestamp:
                             self.__data_start_timestamp = record.timestamp
-                        if not record.symbol:
-                            print "Warning no symbol:", line
-                        if record.is_book_update:
+                        if record.is_book_message() or record.is_trade_message():
                             self.build_books(record)
+
 
                     self.__line_number += 1
 

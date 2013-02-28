@@ -64,7 +64,7 @@ def chicago_time(ts):
     return stamp.astimezone(CHI_TZ)
 
 def chicago_time_str(ts):
-    return chicago_time(ts).strftime('%H:%M:%S:%f') if ts else 'Not Set'
+    return chicago_time(ts).strftime('%H:%M:%S.%f') if ts else 'Not Set'
 
 def get_date_of_file(fileName):
     """

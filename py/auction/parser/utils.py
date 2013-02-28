@@ -122,12 +122,10 @@ class BookBuilder(object):
                                                "Data for "+str(symbol), filters=filters)
         self._record = self._book_table.row
         if rest.get('include_trades'):
-            print "INCLUDING TRADES", rest
             self._trade_table = h5_file.createTable(group, 'trades', TradeTable, 
                                                     "Trades for "+str(symbol), filters=filters)
             self._trade = self._trade_table.row
         else:
-            print "NOT INCLUDING TRADES", rest
             self._trade = None
         self._tick_size = rest.get('tick_size', None) or __TICK_SIZE__ # TODO
         self._symbol = symbol
