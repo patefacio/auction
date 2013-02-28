@@ -319,16 +319,16 @@ class CmeFixParser(object):
         self.__output_path = None
 
     def write_summary(self):
-            ############################################################
-            # Finish filling in the parse summary info and close up
-            ############################################################
-            self.__parse_manager.data_start(self.__data_start_timestamp)
-            self.__parse_manager.data_stop(self.__ts)
-            self.__parse_manager.irrelevants(0)
-            self.__parse_manager.processed(self.__line_number+1)
-            self.__parse_manager.mark_stop(True)
-            self.__h5_file.close()
-            ParseManager.summarize_file(self.__output_path)
+        ############################################################
+        # Finish filling in the parse summary info and close up
+        ############################################################
+        self.__parse_manager.data_start(self.__data_start_timestamp)
+        self.__parse_manager.data_stop(self.__ts)
+        self.__parse_manager.irrelevants(0)
+        self.__parse_manager.processed(self.__line_number+1)
+        self.__parse_manager.mark_stop(True)
+        self.__h5_file.close()
+        ParseManager.summarize_file(self.__output_path)
 
     def advance_date(self, new_date):
         if self.__h5_file:

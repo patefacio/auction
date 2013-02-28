@@ -74,5 +74,4 @@ class CmeRawFileSet(object):
 if __name__ == "__main__":
     import pprint
     fileset = CmeRawFileSet()
-    __HERE__ = path(os.path.realpath(__file__))
-    print "There are ", len(fileset.start_dates), "weeks"
+    print "There are ", len(fileset.start_dates), "weeks", pprint.pformat(fileset.file_map)
