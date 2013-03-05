@@ -12,7 +12,7 @@ CHI_TZ = tz.gettz('America/Chicago')
 LOCAL_TZ = tz.tzlocal()
 __SUBSECOND_RESOLUTION__ = 1000000
 __DateRe__ = re.compile(r"(\d\d\d\d)(\d\d)(\d\d)")
-__CmeDateTimeRe__ = re.compile(r"(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(\d{3})")
+__CmeDateTimeRe__ = re.compile(r"(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(\d{3,5})")
 
 def start_of_date(year, month, day, tzinfo):
     """
@@ -49,9 +49,17 @@ def timestamp_from_mtime(mt):
 def datetime_from_cme_timestamp(ts_str):
     m = __CmeDateTimeRe__.match(ts_str)
     year, mon, day, hr, minutes, sec, millis = m.groups()
+    len_millis = len(millis)
+    if len_millis == 3:
+        micros = int(millis) * 1000
+    elif len_millis == 5:
+        micros = int(millis) * 10
+    elif len_millis == 4:
+        micros = int(millis) * 100
+
     return datetime.datetime(int(year),int(mon),int(day),
                              int(hr),int(minutes),int(sec),
-                             int(millis)*1000)             
+                             micros)             
 
 def timestamp_from_cme_timestamp(ts_str):
     return timestamp_from_datetime(datetime_from_cme_timestamp(ts_str))
@@ -146,3 +154,7 @@ if __name__ == "__main__":
     print get_previous_weekday(some_day, Saturday)
 
     print get_date_string(some_day)
+
+    print chicago_time(timestamp_from_cme_timestamp("20081223195210641"))
+    print chicago_time(timestamp_from_cme_timestamp("2011102813300000175"))
+    print chicago_time(timestamp_from_cme_timestamp("201110281330000017"))
