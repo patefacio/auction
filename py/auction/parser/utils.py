@@ -154,7 +154,7 @@ class BookBuilder(object):
             return True
 
 
-    def make_record(self, ts, ts_s):
+    def make_record(self, ts, ts_s, seqnum):
         """
         A new record has been processed and the bids and asks updated
         accordingly. This takes the new price data and updates the book and
@@ -184,6 +184,7 @@ class BookBuilder(object):
         self._record['ask'] = self._asks
         self._record['timestamp'] = ts
         self._record['timestamp_s'] = ts_s
+        self._record['seqnum'] = seqnum
 
         top_bid = self._bids[0][0]
         top_ask = self._asks[0][0]

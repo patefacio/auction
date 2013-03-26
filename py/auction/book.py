@@ -46,10 +46,12 @@ class InMemoryBook(object):
         assert self.__data['ask'][0][1] > qty
         self.__data['ask'][0][1] -= qty
 
-    def advance_timestamp(self, timestamp, timestamp_s):
+    def advance_timestamp(self, timestamp, timestamp_s, seqnum):
         assert timestamp >= self.__data['timestamp']
+        assert seqnum >= self.__data['seqnum']
         self.__data['timestamp'] = timestamp
         self.__data['timestamp_s'] = timestamp_s
+        self.__data['seqnum'] = seqnum
         
 
 class Book(object):

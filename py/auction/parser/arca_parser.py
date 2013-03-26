@@ -258,7 +258,8 @@ class ArcaBookBuilder(BookBuilder):
 
         # bids and asks have been updated, now update the record and append to the table
         self.make_record(amd_record.timestamp, 
-                         chicago_time_str(amd_record.timestamp))
+                         chicago_time_str(amd_record.timestamp),
+                         amd_record.seq_num)
 
     
 class ArcaFixParser(object):

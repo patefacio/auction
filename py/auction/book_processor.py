@@ -114,14 +114,15 @@ class CmeImpliedBookStream(BookStream):
         return None
 
     def next(self):
-        trade = self.peek_trade()
-        book = self.peek_book()
+        next_trade = self.peek_trade()
+        next_book = self.peek_book()
+        current_book = self._current_book
 
         # If next trade timestamp is ahead of book timestamp, imply a book
-        if trade and book and trade['seqnum'] <= book['seqnum']:
+        if next_trade and next_book and next_trade['seqnum'] <= next_book['seqnum']:
             self.__trade_index += 1
-            trade_price = trade['price']
-            book_object = Book(self._current_book)
+            trade_price = next_trade['price']
+            book_object = Book(current_book)
 
             # See if this trade_price improves the book and if so make/use implied book
             improvement = book_object.trade_improves_top(trade_price)
@@ -129,13 +130,16 @@ class CmeImpliedBookStream(BookStream):
                 
                 side = improvement[0]
                 improve_amount = improvement[1]
-                trade_qty = trade['quantity']
-                timestamp = book_object.timestamp()
-                timestamp_s = book_object.timestamp_s()
+                trade_qty = next_trade['quantity']
+
+                # Use timestamp/seqnum of trade to push InMemoryBook forward
+                timestamp = next_trade['timestamp']
+                timestamp_s = next_trade['timestamp_s']
+                seqnum = next_trade['seqnum']
 
                 # Track how much of the book has been eaten at each price
                 if not self.__implied_book:
-                    self.__implied_book = InMemoryBook(self._current_book)
+                    self.__implied_book = InMemoryBook(current_book)
 
                 if improve_amount > 0:
                     if not self.__logged_original:
@@ -143,7 +147,7 @@ class CmeImpliedBookStream(BookStream):
                         print "Original Book", Book(self._current_book)
                         self.__logged_original = True
 
-                    print "Trade %s (%s @ %s) improves %s"%(trade['seqnum'], trade[1], trade[0], improvement)
+                    print "Trade %s (%s @ %s) improves %s"%(seqnum, next_trade[1], next_trade[0], improvement)
                     
                 # iterate over the implied book and draw down existing quantities
                 if side == 'B':
@@ -154,11 +158,11 @@ class CmeImpliedBookStream(BookStream):
                                 self.__implied_book.reduce_top_bid_qty(trade_qty)
                             else:
                                 self.__implied_book.move_bid_down(i+1)
-                            self.__implied_book.advance_timestamp(timestamp, timestamp_s)
+                            self.__implied_book.advance_timestamp(timestamp, timestamp_s, seqnum)
                             break
                         elif bid[0] < trade_price:
                             self.__implied_book.move_bid_down(i)
-                            self.__implied_book.advance_timestamp(timestamp, timestamp_s)
+                            self.__implied_book.advance_timestamp(timestamp, timestamp_s, seqnum)
                             break
                     if improve_amount > 0:
                         print "Bid Improved Implied\n", Book(self.__implied_book)
@@ -171,11 +175,11 @@ class CmeImpliedBookStream(BookStream):
                                 self.__implied_book.reduce_top_ask_qty(trade_qty)
                             else:
                                 self.__implied_book.move_ask_up(i+1)
-                            self.__implied_book.advance_timestamp(timestamp, timestamp_s)
+                            self.__implied_book.advance_timestamp(timestamp, timestamp_s, seqnum)
                             break
                         elif ask[0] > trade_price:
                             self.__implied_book.move_ask_up(i)
-                            self.__implied_book.advance_timestamp(timestamp, timestamp_s)
+                            self.__implied_book.advance_timestamp(timestamp, timestamp_s, seqnum)
                             break
                     if improve_amount > 0:
                         print "Ask Improved Implied\n", Book(self.__implied_book)
@@ -185,14 +189,14 @@ class CmeImpliedBookStream(BookStream):
                 # Recurse to advance to next
                 return self.next()
         else:
-            # As soon as we get here we have book update, clear an implied data
+            # As soon as we get here we have book update, clear any implied data
             result = BookStream.next(self)
             if self.__implied_book:
                 self.__implied_book = None
                 if self.__logged_original:
                     self.__logged_original = False
-                    b = Book(self.peek_book())
-                    print "Next Book After Trade Through %s\n"%b.seqnum(), Book(self.peek_book()) 
+                    book = Book(result)
+                    print "Next Book After Trade Through", book 
             return result
 
 if __name__ == "__main__":
