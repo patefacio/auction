@@ -13,6 +13,7 @@ from auction.parser.parser_summary import ParseManager
 from auction.parser.utils import PriceOrderedDict, FileRecordCounter, BookBuilder
 from auction.time_utils import *
 from tables import *
+from numpy import array_equal
 
 import os
 import zipfile
@@ -147,7 +148,11 @@ class CmeBookBuilder(BookBuilder):
         ta = self.__ask_book[0]
         return ta[0] if ta else ta
 
-    def write_record(self, ts, ts_s):
+    def write_record(self, ts, ts_s, seqnum):
+
+        previous_bids = self._bids.copy()
+        previous_asks = self._asks.copy()
+
         # copy from book to record
         for i, pair in enumerate(self.__bid_book):
             if pair == None:
@@ -165,14 +170,20 @@ class CmeBookBuilder(BookBuilder):
                 self._asks[i][0] = pair[0]
                 self._asks[i][1] = pair[1]
 
-        self._record['bid'] = self._bids
-        self._record['ask'] = self._asks
-        self._record['timestamp'] = ts
-        self._record['timestamp_s'] = ts_s
-        self._record.append()
-        self._file_record_counter.increment_count()
+        if array_equal(previous_bids, self._bids) and \
+                array_equal(previous_asks, self._asks):
+            return False
+        else:
+            self._record['bid'] = self._bids
+            self._record['ask'] = self._asks
+            self._record['timestamp'] = ts
+            self._record['timestamp_s'] = ts_s
+            self._record['seqnum'] = seqnum
+            self._record.append()
+            self._file_record_counter.increment_count()
+            return True
 
-    def process_record(self, update, ts, chi_ts):
+    def process_record(self, update, ts, chi_ts, seqnum):
         """
         Incorporate the contents of the new record into the bids/asks
         """
@@ -195,14 +206,21 @@ class CmeBookBuilder(BookBuilder):
                 self._trade['timestamp_s'] = chi_ts
                 self._trade['price'] = px
                 self._trade['quantity'] = qty
+                self._trade['seqnum'] = seqnum
                 side = update.get(AggressorSide)
                 if side:
                     self._trade['trade_type'] = '1' if side=='1' else '2'
                 else:
                     self._trade['trade_type'] = '3'
                 self._trade.append()
-                #print "Trade", action, px, qty,"aggressor", update.get(AggressorSide), \
-                #    "tradecondition", update.get(TradeCondition)
+
+                if update.get(TradeCondition):
+                    print "Trade", action, px, qty,"aggressor", update.get(AggressorSide), \
+                        "tradecondition", update.get(TradeCondition)
+
+                if update.get(QuoteCondition):
+                    print "Trade", action, px, qty,"aggressor", update.get(AggressorSide), \
+                        "quotecondition", update.get(QuoteCondition)
         else:
 
             assert (level >= 0), "WARNING: bad level: %s"%readable_update(update)
@@ -255,7 +273,7 @@ class CmeBookBuilder(BookBuilder):
 
 class CmeRefreshMessage(object):
 
-    attribute(msg_type = None, msg_seq_num = None, sending_time = None, no_md_entries = 0) 
+    attribute(msg_type = None, msg_seq_num = None, sending_time = None, no_md_entries = 0, line=None) 
     readable(entries=None)
 
     assigner = {
@@ -269,6 +287,7 @@ class CmeRefreshMessage(object):
         return self.msg_type == 'X'
 
     def __init__(self, line):
+        self.__line = line
         self.__entries = []
         current = {}
         fields = line.split("")[0:-1]
@@ -350,6 +369,10 @@ class CmeFixParser(object):
     def build_books(self, msg):
         try:
             ts = timestamp_from_cme_timestamp(msg.sending_time)
+
+            if 0 == self.__line_number % 100000:
+                print "st:", msg.sending_time, "vs", ts, "vs", chicago_time_str(ts)
+
             if self.__ts:
                 if ts < self.__ts:
                     print "At", self.__line_number+1, "of", self.__current_file, \
@@ -359,6 +382,7 @@ class CmeFixParser(object):
 
             self.__ts = ts
             self.__chi_ts = chicago_time_str(self.__ts)
+
             if 0 == self.__data_start_timestamp:
                 self.__data_start_timestamp = self.__ts
             affected_builders = sets.Set()
@@ -374,7 +398,7 @@ class CmeFixParser(object):
                 if not update[MDEntryType] in __BOOK_ENTRY_TYPES__:
                     continue
         
-                builder.process_record(update, self.__ts, self.__chi_ts)
+                builder.process_record(update, self.__ts, self.__chi_ts, msg.msg_seq_num)
                 affected_builders.add(builder)
 
             for builder in affected_builders:
@@ -382,15 +406,17 @@ class CmeFixParser(object):
                 top_ask = builder.top_ask()
                 if top_bid and top_ask:
                     if top_bid == top_ask:
-                        msg = builder.symbol + ': Locked (%s, %s)'%(top_bid, top_ask)
-                        print msg
-                        self.__parse_manager.warning(msg, 'L', self.__ts, self.__line_number+1)
+                        warning_msg = builder.symbol + ': Locked (%s, %s)'%(top_bid, top_ask)
+                        print warning_msg
+                        self.__parse_manager.warning(warning_msg, 'L', self.__ts, self.__line_number+1)
                     elif top_bid > top_ask:
-                        msg = builder.symbol + ': Crossed (%s, %s)'%(top_bid, top_ask)
-                        print msg
-                        self.__parse_manager.warning(msg, 'C', self.__ts, self.__line_number+1)
+                        warning_msg = builder.symbol + ': Crossed (%s, %s)'%(top_bid, top_ask)
+                        print warning_msg
+                        self.__parse_manager.warning(warning_msg, 'C', self.__ts, self.__line_number+1)
 
-                    builder.write_record(self.__ts, self.__chi_ts)
+                    if not builder.write_record(self.__ts, self.__chi_ts, msg.msg_seq_num):
+                        #print "Msg no book change", msg.line
+                        pass
 
         except Exception,e:
             print traceback.format_exc()
