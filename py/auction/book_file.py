@@ -69,11 +69,14 @@ if __name__ == "__main__":
     import os
     import pprint
     from auction.paths import *    
-    reader = BookFileReader(BOOK_DATA / 'book__.b...SPY.QQQ.DIA.CSCO.HD.LOW..b_.h5',
-                            ['SPY', 'QQQ'])
+    reader = BookFileReader(CME_OUT_PATH / '20111017', ['ESZ1'])
+    count = 0
 
     def print_record(symbol, b):
-        #print symbol, b.timestamp_s(), b.top()
+        global count
+        if (0 == (count%100000)):
+            print count, symbol, b.timestamp_s(), b.top() 
+        count += 1
         return
 
     reader.ordered_visit(print_record)
