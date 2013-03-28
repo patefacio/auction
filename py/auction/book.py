@@ -11,6 +11,16 @@ class BookTable(IsDescription):
     bid         = Int64Col(shape=(10,2))
     seqnum      = Int64Col()
 
+class ImpliedBookTable(IsDescription):
+    """
+    Basic book table
+    """
+    timestamp   = Int64Col()
+    timestamp_s = StringCol(16)
+    ask         = Int64Col(shape=(10,2))
+    bid         = Int64Col(shape=(10,2))
+    implied     = Int32Col()
+
 class InMemoryBook(object):
     """ 
 
@@ -55,6 +65,9 @@ class InMemoryBook(object):
 
     def is_implied(self):
         return True
+
+    def book(self):
+        return self.__data
 
 class Book(object):
     """
@@ -122,6 +135,9 @@ class Book(object):
         for bid in self.__record['bid']:
             result.append( "\t"+str((bid[0], bid[1])) )
         return string.join(result, '\n')
+
+    def book(self):
+        return self.__record
 
     def is_implied(self):
         return False

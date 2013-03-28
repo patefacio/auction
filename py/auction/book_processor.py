@@ -1,8 +1,9 @@
 from path import path
 from attribute import readable, writable
 from tables import *
-from auction.book import Book, InMemoryBook, BookTable
+from auction.book import Book, ImpliedBookTable, InMemoryBook, BookTable
 from auction.paths import *
+from numpy import zeros
 import sys
 import re
 
@@ -35,6 +36,15 @@ class H5Repository(object):
 
         if not result.exists():
             raise Exception("Could not find data file for (%s, %s) at %s"%(date,symbol,result))
+
+        return H5Repository.get_opened_file(result)
+
+    @staticmethod
+    def find_cme_file(date):
+        result =  CME_OUT_PATH / date
+
+        if not result.exists():
+            raise Exception("Could not find data file for (%s, %s) at %s"%(date,result))
 
         return H5Repository.get_opened_file(result)
 
@@ -76,7 +86,7 @@ class BookStream(object):
 
     def next(self):
         if self.__index < self.__book_count:
-            self._current_book = self.__book_ds[self.__index]
+            self._current_book = Book(self.__book_ds[self.__index])
             self.__index += 1
             return self._current_book
         else:
@@ -122,10 +132,9 @@ class CmeImpliedBookStream(BookStream):
         if next_trade and next_book and next_trade['seqnum'] <= next_book['seqnum']:
             self.__trade_index += 1
             trade_price = next_trade['price']
-            book_object = Book(current_book)
 
             # See if this trade_price improves the book and if so make/use implied book
-            improvement = book_object.trade_improves_top(trade_price)
+            improvement = current_book.trade_improves_top(trade_price)
             if improvement:
                 
                 side = improvement[0]
@@ -139,12 +148,12 @@ class CmeImpliedBookStream(BookStream):
 
                 # Track how much of the book has been eaten at each price
                 if not self.__implied_book:
-                    self.__implied_book = InMemoryBook(current_book)
+                    self.__implied_book = InMemoryBook(current_book.book())
 
                 if improve_amount > 0:
                     if not self.__logged_original:
                         print "------------------------------------------------------"
-                        print "Original Book", Book(self._current_book)
+                        print "Original Book", current_book
                         self.__logged_original = True
 
                     print "Trade %s (%s @ %s) improves %s"%(seqnum, next_trade[1], next_trade[0], improvement)
@@ -195,21 +204,53 @@ class CmeImpliedBookStream(BookStream):
                 self.__implied_book = None
                 if self.__logged_original:
                     self.__logged_original = False
-                    book = Book(result)
-                    print "Next Book After Trade Through", book 
+                    print "Next Book After Trade Through", result
             return result
 
+class CmeImpliedBookWriter(object):
+
+    def __init__(self, date):
+        self.__infile = H5Repository.find_cme_file(date)
+        filters = Filters(complevel=1, complib='zlib')
+        inpath = path(self.__infile.filename)
+        self.__outpath = inpath.parent / (str(inpath.name) + ".implied")        
+        print "Creating", self.__outpath
+        self.__outfile = openFile(self.__outpath, mode = "w", title = "CME Implied")
+        for symbol in self.__infile.root:
+            symbol = symbol._v_name
+            if symbol == 'parse_results':
+                continue
+            group = self.__outfile.createGroup("/", symbol, 'implied book')
+            table = self.__outfile.createTable(group, 'implied', ImpliedBookTable, "Books plus trades", filters=filters)            
+            row = table.row
+            print "Processing symbol", symbol
+
+            reader = CmeImpliedBookStream(date, symbol)
+            
+            for book in reader:
+                b = book.book()
+                row['implied'] = book.is_implied() and 1 or 0
+                row['timestamp'] = b['timestamp']
+                row['timestamp_s'] = b['timestamp_s']
+                target_bid = row['bid']
+                target_ask = row['ask']
+                src_bid = b['bid']
+                src_ask = b['ask']
+                levels = len(target_bid)
+                for i, bid in enumerate(src_bid):
+                    target_bid[i] = src_bid[i]
+                for i in range(len(src_bid), levels):
+                    target_bid[i] = (0.0, 0.0)
+                for i, ask in enumerate(src_ask):
+                    target_ask[i] = src_ask[i]
+                for i in range(len(src_ask), levels):
+                    target_ask[i] = (0.0, 0.0)
+                row['bid'] = target_bid
+                row['ask'] = target_ask
+                row.append()
+
+            table.flush()
+
+
 if __name__ == "__main__":
-
-    # Set up a book stream that deals with implied books
-    # Note: if you did not want implied books you could just have
-    # reader = BookStream('20111017', 'ESZ1')
-    reader = CmeImpliedBookStream('20111017', 'ESZ1')
-
-    # This iterates over all implied book records, so there will be a record
-    # for each trade that improves as well as one for each book
-    for b in reader:
-        book = Book(b)
-        if book.is_implied():
-            print "Book is implied", book
-
+    CmeImpliedBookWriter('20111017')
