@@ -153,7 +153,6 @@ class BookBuilder(object):
         else:
             return True
 
-
     def make_record(self, ts, ts_s, seqnum):
         """
         A new record has been processed and the bids and asks updated
