@@ -209,4 +209,7 @@ if __name__ == "__main__":
     # This iterates over all implied book records, so there will be a record
     # for each trade that improves as well as one for each book
     for b in reader:
-        pass
+        book = Book(b)
+        if book.is_implied():
+            print "Book is implied", book
+
