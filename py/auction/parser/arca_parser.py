@@ -10,6 +10,7 @@ from attribute import readable, writable
 from auction.paths import *
 from auction.book import Book, BookTable
 from auction.parser.parser_summary import ParseManager
+from auction.parser.utils import *
 from auction.time_utils import *
 
 from tables import *
@@ -31,7 +32,7 @@ __PriceRe__ = re.compile(r"\s*(\d*)(?:\.(\d+))?\s*")
 __DateRe__ = re.compile(r"(\d\d\d\d)(\d\d)(\d\d)")
 __ARCA_SRC_PATH__ = DATA_PATH / 'NYSE_ARCA2'
 __ARCA_OUT_PATH__ = BOOK_DATA / 'arca'
-__FLUSH_FREQ__ = 10000
+__FLUSH_FREQ__ = 500000
 __LEVELS__ = 10
 __PX_MULTIPLIER__ = 1000000
 __PX_DECIMAL_DIGITS__ = 6
@@ -258,10 +259,11 @@ class ArcaBookBuilder(BookBuilder):
 
         # bids and asks have been updated, now update the record and append to the table
         self.make_record(amd_record.timestamp, 
-                         chicago_time_str(amd_record.timestamp))
+                         chicago_time_str(amd_record.timestamp),
+                         amd_record.seq_num)
 
     
-class ArcaFixParser(object):
+class ArcaParser(object):
     r"""
 
 Parse arca files and create book
@@ -269,18 +271,18 @@ Parse arca files and create book
 """
 
 
-    def __init__(self, input_path, input_date, file_tag, symbol_match_re = None):
+    def __init__(self, input_path, input_date, file_tag, symbols = []):
         """
         input_path - path to input data
         input_date - date of data in file
         file_tag - tag for naming the file
-        symbol_match_re - regex on which symbols to include
+        symbols - symbols of interest
         """
         self.__input_path = input_path
         self.__date = input_date
         self.__file_tag = file_tag
-        self.__output_base = __ARCA_OUT_PATH__ / (str(self.__date)+'_'+file_tag)
-        self.__symbol_match_re = symbol_match_re
+        self.__output_base = __ARCA_OUT_PATH__ / (get_date_string(self.__date)+'_'+file_tag)
+        self.__symbols = symbols
         self.__start_of_date = start_of_date(self.__date.year, self.__date.month,
                                              self.__date.day, NY_TZ)
 
@@ -332,8 +334,8 @@ Parse arca files and create book
             if 0 == (self.__line_number % 1000000):
                 logging.info("At %d hit count is %d on %s" % 
                              (self.__line_number, hit_count, 
-                              (self.__symbol_match_re and 
-                               self.__symbol_match_re.pattern or "*")))
+                              (self.__symbols and 
+                               self.__symbols or "*")))
 
             fields = re.split(r'\s*,\s*', line)
             code = fields[0]
@@ -344,15 +346,15 @@ Parse arca files and create book
                 record = DeleteRecord(fields, self.__start_of_date)
             elif code == 'M':
                 record = ModifyRecord(fields, self.__start_of_date)
-            elif code == 'I':
+            elif code == 'I' or code == 'V':
                 continue
             else:
-                raise RuntimeError("Unexpected record type '" + 
-                                   code + "' at line " + str(self.__line_number) + 
-                                   " of file " + self.__input_path)
+                continue
+                #raise RuntimeError("Unexpected record type '" + 
+                #                   code + "' at line " + str(self.__line_number) + 
+                #                   " of file " + self.__input_path)
 
-            if self.__symbol_match_re and \
-                    not self.__symbol_match_re.search(record.symbol):
+            if self.__symbols and (not record.symbol in self.__symbols):
                 continue
             else:
                 hit_count += 1
@@ -377,7 +379,7 @@ Parse arca files and create book
 
                     h5Record.append()
 
-                    if 0 == self.__line_number % __FLUSH_FREQ__:
+                    if 0 == hit_count % __FLUSH_FREQ__:
                         table.flush()
 
         books_good = True
@@ -476,13 +478,16 @@ files for symbols present in the raw data.
             # Exchanges
             'CME', 'NYX',
             # Big Techs
-            'AAPL', 'MSFT', 'GOOG', 'CSCO'
+            'AAPL', 'MSFT', 'GOOG', 'CSCO',
+
+            # From top 10 by market cap http://www.standardandpoors.com/indices/sp-500/en/us/?indexId=spusa-500-usduf--p-us-l--
+            'GE', 'CVX', 'JNJ', 'IBM', 'PG', 'PFE',
+
             ]
-        symbol_text = 'MOTLEY_10Lev'
+
+        symbol_text = 'TOP'
 
     options.symbols.sort()
-    re_text = r'\b(?:' + string.join(options.symbols, '|') + r')\b'
-    symbol_re = re.compile(re_text)
     if not symbol_text:
         symbol_text = string.join(options.symbols, '_')
 
@@ -490,6 +495,7 @@ files for symbols present in the raw data.
         date = get_date_of_file(compressed_src)
         print "Examining", compressed_src.basename(), date
         if date:
-            parser = ArcaFixParser(compressed_src, date, symbol_text, symbol_re)
+            parser = ArcaParser(compressed_src, date, symbol_text, Set(options.symbols))
             #parser.parse(True, 50000)
             parser.parse(True, False)
+

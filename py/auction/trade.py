@@ -6,3 +6,4 @@ class TradeTable(IsDescription):
     trade_type  = Int64Col()
     price       = Int64Col()
     quantity    = Int64Col()
+    seqnum      = Int64Col()

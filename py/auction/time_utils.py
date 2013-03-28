@@ -158,3 +158,11 @@ if __name__ == "__main__":
     print chicago_time(timestamp_from_cme_timestamp("20081223195210641"))
     print chicago_time(timestamp_from_cme_timestamp("2011102813300000175"))
     print chicago_time(timestamp_from_cme_timestamp("201110281330000017"))
+
+
+    print chicago_time_str(timestamp_from_cme_timestamp("20081223195210641"))
+    print chicago_time_str(timestamp_from_cme_timestamp("2011102813300000175"))
+    print chicago_time_str(timestamp_from_cme_timestamp("20111028032135310"))
+    print chicago_time_str(timestamp_from_cme_timestamp("201110281330000017"))
+
+
