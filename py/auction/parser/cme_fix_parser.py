@@ -313,9 +313,9 @@ class CmeFixParser(object):
         self.__book_builders = {}
         self.__prior_day_books = {}
         self.__h5_file = None
-        self.__ts = None
+        self.__ts = 0
         self.__chi_ts = None
-        self.__data_start_timestamp = None
+        self.__data_start_timestamp = 0
         self.__output_path = None
 
     def write_summary(self):
@@ -343,6 +343,7 @@ class CmeFixParser(object):
         self.__parse_manager.mark_start()
         self.__prior_day_books = {}
         self.__data_start_timestamp = 0
+        self.__ts = 0
         for symbol, builder in self.__book_builders.items():
             self.__prior_day_books[symbol] = (builder.bid_book, builder.ask_book)
         self.__book_builders = {}
@@ -383,11 +384,11 @@ class CmeFixParser(object):
                 if top_bid and top_ask:
                     if top_bid == top_ask:
                         msg = builder.symbol + ': Locked (%s, %s)'%(top_bid, top_ask)
-                        print msg
+                        #print msg
                         self.__parse_manager.warning(msg, 'L', self.__ts, self.__line_number+1)
                     elif top_bid > top_ask:
                         msg = builder.symbol + ': Crossed (%s, %s)'%(top_bid, top_ask)
-                        print msg
+                        #print msg
                         self.__parse_manager.warning(msg, 'C', self.__ts, self.__line_number+1)
 
                     builder.write_record(self.__ts, self.__chi_ts)

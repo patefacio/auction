@@ -17,20 +17,19 @@ if __name__ == "__main__":
             print "NO SUNDAY DATA FOR", d
             return
         ftype = fileset.date_map[d]['type']
+        week_dates = fileset.start_dates[d]
+        args = [ "-d" ]
+        for wd in week_dates:
+            args.append(get_date_string(wd))
+        logging.info("Generating data for week of", d, "=>", fileset.start_dates[d])
+        sunday = get_date_string(d)
+
         if ftype == 'FFIX':
-            week_dates = fileset.start_dates[d]
-            args = [ "-d" ]
-            for wd in week_dates:
-                args.append(get_date_string(wd))
-            logging.info("Generating data for week of", d, "=>", fileset.start_dates[d])
-            sunday = get_date_string(d)
             subprocess.call(["python", __HERE__.parent / "cme_fix_parser.py",] + args)
         else:
-            print "Skipping type:", ftype, fileset.date_map[d]['fname']
-            
-
+            subprocess.call(["python", __HERE__.parent / "cme_rlc_parser.py",] + args)
 
     #pprint.pprint(fileset.start_dates)
-    p = Pool(15)
-    p.map(generate_book_data, fileset.start_dates.keys()[0:3])
+    p = Pool(24)
+    p.map(generate_book_data, fileset.start_dates.keys())
     print "There are ", len(fileset.start_dates), "weeks"

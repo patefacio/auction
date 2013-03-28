@@ -186,7 +186,7 @@ class CmeRlcParser(object):
         self.__h5_file = None
         self.__ts = None
         self.__chi_ts = None
-        self.__data_start_timestamp = None
+        self.__data_start_timestamp = 0
         self.__current_timestamp = None
         self.__output_path = None
         self.__prior_day_books = {}
@@ -216,6 +216,7 @@ class CmeRlcParser(object):
         self.__parse_manager.mark_start()
         self.__prior_day_books = {}
         self.__data_start_timestamp = 0
+        self.__current_timestamp = 0
         for symbol, builder in self.__book_builders.items():
             self.__prior_day_books[symbol] = (builder.bid_book, builder.ask_book)
         self.__book_builders = {}
@@ -259,10 +260,12 @@ class CmeRlcParser(object):
                     i =i+1
                     if not  __BLANK_LINE__.match(line):
                         record = RlcRecord(line)
-                        self.__current_timestamp = record.timestamp
-                        if 0 == self.__data_start_timestamp:
-                            self.__data_start_timestamp = record.timestamp
                         if record.is_book_message() or record.is_trade_message():
+                            self.__current_timestamp = record.timestamp
+                            if 0 == self.__data_start_timestamp:
+                                assert record.timestamp
+                                self.__data_start_timestamp = record.timestamp
+
                             self.build_books(record)
 
 
