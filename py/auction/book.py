@@ -52,7 +52,9 @@ class InMemoryBook(object):
         self.__data['timestamp'] = timestamp
         self.__data['timestamp_s'] = timestamp_s
         self.__data['seqnum'] = seqnum
-        
+
+    def is_implied(self):
+        return True
 
 class Book(object):
     """
@@ -120,3 +122,6 @@ class Book(object):
         for bid in self.__record['bid']:
             result.append( "\t"+str((bid[0], bid[1])) )
         return string.join(result, '\n')
+
+    def is_implied(self):
+        return False
