@@ -20,7 +20,7 @@ if __name__ == "__main__":
         logging.info("Generating data input: %s =>\n\t%s"%(input.name, args))
         subprocess.call(args)
 
-    p = Pool(3)
+    p = Pool(22)
     input_files = __ARCA_SRC_PATH__.files()
     p.map(generate_book_data, input_files)
 

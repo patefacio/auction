@@ -190,7 +190,7 @@ class BookBuilder(object):
         if top_bid and top_ask and (top_bid >= top_ask):
             tag = 'L' if (top_bid==top_ask) else 'C'
             excp = PriceException(self._symbol, tag, (self._bids[0], self._asks[0])) 
-            print excp.message
+            #print excp.message
             raise excp
 
         if (self._bids == previous_bids).all() and (self._asks == previous_asks).all():

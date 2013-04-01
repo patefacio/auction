@@ -281,7 +281,7 @@ Parse arca files and create book
         self.__input_path = input_path
         self.__date = input_date
         self.__file_tag = file_tag
-        self.__output_base = __ARCA_OUT_PATH__ / (str(self.__date)+'_'+file_tag)
+        self.__output_base = __ARCA_OUT_PATH__ / (get_date_string(self.__date)+'_'+file_tag)
         self.__symbols = symbols
         self.__start_of_date = start_of_date(self.__date.year, self.__date.month,
                                              self.__date.day, NY_TZ)
@@ -346,12 +346,13 @@ Parse arca files and create book
                 record = DeleteRecord(fields, self.__start_of_date)
             elif code == 'M':
                 record = ModifyRecord(fields, self.__start_of_date)
-            elif code == 'I':
+            elif code == 'I' or code == 'V':
                 continue
             else:
-                raise RuntimeError("Unexpected record type '" + 
-                                   code + "' at line " + str(self.__line_number) + 
-                                   " of file " + self.__input_path)
+                continue
+                #raise RuntimeError("Unexpected record type '" + 
+                #                   code + "' at line " + str(self.__line_number) + 
+                #                   " of file " + self.__input_path)
 
             if self.__symbols and (not record.symbol in self.__symbols):
                 continue
@@ -483,7 +484,8 @@ files for symbols present in the raw data.
             'GE', 'CVX', 'JNJ', 'IBM', 'PG', 'PFE',
 
             ]
-        symbol_text = 'MOTLEY_10Lev'
+
+        symbol_text = 'TOP'
 
     options.symbols.sort()
     if not symbol_text:
