@@ -36,6 +36,8 @@ __LEVELS__ = 10
 class RlcRecord(object):
     readable(levels=None, symbol=None, timestamp=None, trade_details=None)
 
+    sequence_number = 0
+
     @staticmethod
     def make_timestamp(date_time, seconds_centis):
         m = __CmeDateTimeRe__.match(date_time)
@@ -56,9 +58,14 @@ class RlcRecord(object):
     def is_trade_message(self):
         return self.__msg_type == 'M6'
 
+    def next_sequence_number(self):
+        RlcRecord.sequence_number = RlcRecord.sequence_number + 1
+        return RlcRecord.sequence_number
+
     def __init__(self, line):
         self.__msg_type = line[33:35]
         if self.is_trade_message():
+            self.next_sequence_number()
             self.__host_ts = line[12:17]
             self.__trade_date = line[41:49]
             self.__symbol = line[49:69].strip()
@@ -68,6 +75,7 @@ class RlcRecord(object):
             self.__trade_details = (int(line[81:100]), int(line[69:81]), int(line[188:189]))
 
         elif self.is_book_message():
+            self.next_sequence_number()
             self.__host_ts = line[12:17]
             self.__trade_date = line[41:49]
             self.__symbol = line[49:69].strip()
@@ -155,6 +163,7 @@ class CmeRlcBookBuilder(BookBuilder):
         self._record['ask'] = self._asks
         self._record['timestamp'] = ts
         self._record['timestamp_s'] = ts_s
+        self._record['seqnum'] = RlcRecord.sequence_number
         self._record.append()
         self._file_record_counter.increment_count()
 
@@ -166,6 +175,7 @@ class CmeRlcBookBuilder(BookBuilder):
             self._trade['price'] = trade_details[0]
             self._trade['quantity'] = trade_details[1]
             self._trade['trade_type'] = trade_details[2]
+            self._trade['seqnum'] = RlcRecord.sequence_number
             self._trade.append()
         
 
