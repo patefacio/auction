@@ -25,7 +25,8 @@ if __name__ == "__main__":
         sunday = get_date_string(d)
 
         if ftype == 'FFIX':
-            subprocess.call(["python", __HERE__.parent / "cme_fix_parser.py",] + args)
+            pass
+            #subprocess.call(["python", __HERE__.parent / "cme_fix_parser.py",] + args)
         else:
             subprocess.call(["python", __HERE__.parent / "cme_rlc_parser.py",] + args)
 

@@ -4,6 +4,7 @@ from tables import *
 from auction.book import Book, ImpliedBookTable, InMemoryBook, BookTable
 from auction.paths import *
 from numpy import zeros
+import shutil
 import sys
 import re
 
@@ -150,7 +151,7 @@ class CmeImpliedBookStream(BookStream):
                 if not self.__implied_book:
                     self.__implied_book = InMemoryBook(current_book.book())
 
-                if improve_amount > 0:
+                if False and improve_amount > 0:
                     if not self.__logged_original:
                         print "------------------------------------------------------"
                         print "Original Book", current_book
@@ -173,7 +174,7 @@ class CmeImpliedBookStream(BookStream):
                             self.__implied_book.move_bid_down(i)
                             self.__implied_book.advance_timestamp(timestamp, timestamp_s, seqnum)
                             break
-                    if improve_amount > 0:
+                    if False and improve_amount > 0:
                         print "Bid Improved Implied\n", Book(self.__implied_book)
                 else:
                     assert side == 'A'
@@ -190,7 +191,7 @@ class CmeImpliedBookStream(BookStream):
                             self.__implied_book.move_ask_up(i)
                             self.__implied_book.advance_timestamp(timestamp, timestamp_s, seqnum)
                             break
-                    if improve_amount > 0:
+                    if False and improve_amount > 0:
                         print "Ask Improved Implied\n", Book(self.__implied_book)
 
                 return self.__implied_book
@@ -202,7 +203,7 @@ class CmeImpliedBookStream(BookStream):
             result = BookStream.next(self)
             if self.__implied_book:
                 self.__implied_book = None
-                if self.__logged_original:
+                if False and self.__logged_original:
                     self.__logged_original = False
                     print "Next Book After Trade Through", result
             return result
@@ -215,7 +216,7 @@ class CmeImpliedBookWriter(object):
         inpath = path(self.__infile.filename)
         self.__outpath = inpath.parent / (str(inpath.name) + ".implied")        
         print "Creating", self.__outpath
-        self.__outfile = openFile(self.__outpath, mode = "w", title = "CME Implied")
+        self.__outfile = openFile(str(self.__outpath) + '.in_progress', mode = "w", title = "CME Implied")
         for symbol in self.__infile.root:
             symbol = symbol._v_name
             if symbol == 'parse_results':
@@ -251,6 +252,21 @@ class CmeImpliedBookWriter(object):
 
             table.flush()
 
+        self.__outfile.close()
+        shutil.move(str(self.__outpath)+'.in_progress', self.__outpath)
 
 if __name__ == "__main__":
-    CmeImpliedBookWriter('20111017')
+    import argparse
+    parser = argparse.ArgumentParser("""
+Takes a cme hdf5 file with book and trade data and generates the implied data
+""")
+
+    parser.add_argument('-d', '--date', 
+                        dest='date',
+                        action='store',
+                        help='Date to process, if empty all dates assumed')
+
+    options = parser.parse_args()
+
+    #CmeImpliedBookWriter('20111017')
+    CmeImpliedBookWriter(options.date)
